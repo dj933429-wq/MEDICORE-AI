@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../../lib/auth';
 import { db } from '../../lib/firebase';
 import { collection, query, getDocs, orderBy, doc, getDoc, where, addDoc, serverTimestamp } from 'firebase/firestore';
@@ -40,6 +40,11 @@ interface Appointment {
   createdAt?: unknown;
 }
 
+interface ChatMessage {
+  role: 'user' | 'ai';
+  text: string;
+}
+
 export default function PatientDashboard() {
   const { user } = useAuth();
   const [patientDoc, setPatientDoc] = useState<PatientDoc | null>(null);
@@ -53,6 +58,16 @@ export default function PatientDashboard() {
   const [booking, setBooking] = useState(false);
   const [apptError, setApptError] = useState('');
   const [newAppt, setNewAppt] = useState({ doctorId: '', date: '', time: '', notes: '' });
+
+  // AI Chat State
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
+  const [chatInput, setChatInput] = useState('');
+  const [chatLoading, setChatLoading] = useState(false);
+  const chatEndRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [chatMessages]);
 
   useEffect(() => {
     if (!user) return;
@@ -170,6 +185,36 @@ export default function PatientDashboard() {
       setApptError("Failure dispatching scheduling request.");
     } finally {
       setBooking(false);
+    }
+  };
+
+  const handleSendChat = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    if (!chatInput.trim() || chatLoading) return;
+    
+    const userText = chatInput.trim();
+    setChatMessages(prev => [...prev, { role: 'user', text: userText }]);
+    setChatInput('');
+    setChatLoading(true);
+
+    try {
+      const res = await fetch('/api/ai-assistant', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: userText })
+      });
+      
+      const data = await res.json();
+      if (res.ok) {
+        setChatMessages(prev => [...prev, { role: 'ai', text: data.reply }]);
+      } else {
+        setChatMessages(prev => [...prev, { role: 'ai', text: "Error: " + (data.error || "unavailable") }]);
+      }
+    } catch (err) {
+      console.error("AI Fetch Failure:", err);
+      setChatMessages(prev => [...prev, { role: 'ai', text: "Network error connecting to the AI system." }]);
+    } finally {
+      setChatLoading(false);
     }
   };
 
@@ -337,6 +382,57 @@ export default function PatientDashboard() {
                 ))}
               </div>
             )}
+          </section>
+
+          {/* AI Medical Assistant Array View */}
+          <section className="mt-8">
+            <h2 className="text-xl font-bold text-gray-900 mb-4 border-b border-gray-200 pb-2">AI Medical Assistant</h2>
+            <div className="bg-white rounded-xl shadow-md border border-gray-100 p-6 flex flex-col h-[500px]">
+              <div className="flex-1 overflow-y-auto mb-4 space-y-4 pr-2">
+                {chatMessages.length === 0 ? (
+                  <div className="h-full flex flex-col items-center justify-center text-center text-gray-500">
+                    <svg className="w-12 h-12 mb-3 text-blue-300" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z"></path></svg>
+                    <p className="font-medium">How can I assist you with your health profiling today?</p>
+                    <p className="text-sm mt-1">Remember: Always consult a registered doctor for genuine diagnoses.</p>
+                  </div>
+                ) : (
+                  chatMessages.map((msg, i) => (
+                    <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                      <div className={`max-w-[80%] rounded-xl px-5 py-3 ${msg.role === 'user' ? 'bg-blue-600 text-white rounded-br-none shadow-sm' : 'bg-gray-200 text-gray-900 rounded-bl-none shadow-sm'}`}>
+                        <p className="whitespace-pre-wrap leading-relaxed text-sm md:text-base">{msg.text}</p>
+                      </div>
+                    </div>
+                  ))
+                )}
+                {chatLoading && (
+                  <div className="flex justify-start">
+                    <div className="bg-gray-200 text-gray-500 max-w-[80%] rounded-xl rounded-bl-none px-5 py-3 shadow-sm flex gap-1 items-center">
+                      <span className="w-2 h-2 bg-gray-400 rounded-full animate-bounce"></span>
+                      <span className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{animationDelay: '0.2s'}}></span>
+                      <span className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{animationDelay: '0.4s'}}></span>
+                    </div>
+                  </div>
+                )}
+                <div ref={chatEndRef} />
+              </div>
+              <form onSubmit={handleSendChat} className="flex gap-3 border-t border-gray-100 pt-4">
+                <input
+                  type="text"
+                  placeholder="Ask a general health question..."
+                  className="flex-1 border border-gray-300 rounded-lg px-4 py-3 bg-white focus:ring-2 focus:ring-blue-600 outline-none transition-shadow text-gray-800"
+                  value={chatInput}
+                  onChange={e => setChatInput(e.target.value)}
+                  disabled={chatLoading}
+                />
+                <button
+                  type="submit"
+                  disabled={chatLoading || !chatInput.trim()}
+                  className="bg-blue-600 text-white rounded-lg px-6 py-3 font-medium hover:bg-blue-700 transition-colors shadow-sm disabled:opacity-50"
+                >
+                  Send
+                </button>
+              </form>
+            </div>
           </section>
         </div>
       </div>
