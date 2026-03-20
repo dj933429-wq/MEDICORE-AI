@@ -41,6 +41,9 @@ export default function Dashboard() {
       return <DoctorDashboard />;
     case 'patient':
       return <PatientDashboard />;
+    case 'pharmacist':
+      window.location.href = '/dashboard/pharmacist';
+      return null;
     default:
       return <div>Unknown role.</div>;
   }

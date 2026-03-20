@@ -4,14 +4,22 @@ import { useState, useEffect } from 'react';
 import { db } from '../../lib/firebase';
 import { collection, getDocs } from 'firebase/firestore';
 
+interface User {
+  id: string;
+  name: string;
+  email: string;
+  role: string;
+  [key: string]: any;
+}
+
 export default function AdminDashboard() {
-  const [users, setUsers] = useState([]);
+  const [users, setUsers] = useState<User[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
 
   useEffect(() => {
     const fetchUsers = async () => {
       const usersCollection = await getDocs(collection(db, 'users'));
-      setUsers(usersCollection.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+      setUsers(usersCollection.docs.map(doc => ({ id: doc.id, ...doc.data() } as User)));
     };
     fetchUsers();
   }, []);

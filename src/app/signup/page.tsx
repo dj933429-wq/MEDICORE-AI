@@ -74,6 +74,7 @@ export default function SignupPage() {
             >
               <option value="patient">Patient</option>
               <option value="doctor">Doctor</option>
+              <option value="pharmacist">Pharmacist</option>
             </select>
           </div>
 
