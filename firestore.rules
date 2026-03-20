@@ -1,18 +1,25 @@
-rules_version='2'
+rules_version = '2';
 
 service cloud.firestore {
   match /databases/{database}/documents {
-    match /{document=**} {
-      // This rule allows anyone with your database reference to view, edit,
-      // and delete all data in your database. It is useful for getting
-      // started, but it is configured to expire after 30 days because it
-      // leaves your app open to attackers. At that time, all client
-      // requests to your database will be denied.
-      //
-      // Make sure to write security rules for your app before that time, or
-      // else all client requests to your database will be denied until you
-      // update your rules.
-      allow read, write: if request.time < timestamp.date(2026, 4, 19);
+    match /users/{userId} {
+      allow read: if request.auth != null && resource.data.role == "doctor";
+      allow write: if request.auth != null && request.auth.uid == userId;
+    }
+    match /patients/{patientId} {
+      // Patients collection requires user authorization mapping to the creator
+      allow read, update, delete: if request.auth != null && resource.data.userId == request.auth.uid;
+      allow create: if request.auth != null && request.resource.data.userId == request.auth.uid;
+      
+      match /medicalRecords/{recordId} {
+      	// Must inherit the parent patient's userId check tightly
+        allow read, write: if request.auth != null && get(/databases/$(database)/documents/patients/$(patientId)).data.userId == request.auth.uid;
+      }
+    }
+    
+    match /appointments/{appointmentId} {
+      allow create: if request.auth != null && request.resource.data.patientId == request.auth.uid;
+      allow read, update: if request.auth != null && (resource.data.patientId == request.auth.uid || resource.data.doctorId == request.auth.uid);
     }
   }
 }

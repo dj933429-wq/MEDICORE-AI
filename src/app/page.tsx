@@ -2,18 +2,20 @@ import Link from 'next/link';
 
 export default function HomePage() {
   return (
-    <div className="min-h-screen flex flex-col items-center justify-center bg-gray-100">
-      <div className="max-w-4xl mx-auto text-center">
-        <h1 className="text-6xl font-bold text-gray-800 mb-4">MediCore AI</h1>
-        <p className="text-xl text-gray-600 mb-8">Your AI-Powered Hospital Management System</p>
-        <div className="flex justify-center space-x-4">
-          <Link href="/login" className="px-6 py-3 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors">
-            Login
-          </Link>
-          <Link href="/signup" className="px-6 py-3 bg-gray-600 text-white rounded-md hover:bg-gray-700 transition-colors">
-            Sign Up
-          </Link>
-        </div>
+    <div className="min-h-screen flex flex-col items-center justify-center bg-gradient-to-br from-blue-50 to-gray-100">
+      <div className="max-w-3xl mx-auto px-4 text-center">
+        <h1 className="text-5xl md:text-6xl font-extrabold text-gray-900 tracking-tight mb-4">
+          MEDICORE AI
+        </h1>
+        <p className="text-xl md:text-2xl text-gray-600 mb-10">
+          Smart Medical Record System
+        </p>
+        <Link 
+          href="/login" 
+          className="inline-block px-8 py-4 bg-blue-600 text-white text-lg font-semibold rounded-lg hover:bg-blue-700 transition-colors shadow-md hover:shadow-lg"
+        >
+          Get Started
+        </Link>
       </div>
     </div>
   );
