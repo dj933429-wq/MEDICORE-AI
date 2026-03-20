@@ -1,66 +1,26 @@
-# MediCore AI - Blueprint
+# Project Blueprint: MEDICORE-AI
 
 ## Overview
+Medicore-AI is a Next.js application built with the App Router, incorporating React, Tailwind CSS, and Firebase (Authentication & Firestore) to serve as a hub for medical staff and patients. It provides strict role-based dashboards to manage users, patients, and health records cleanly and securely.
 
-MediCore AI is an AI-powered Hospital Management System designed to streamline patient management, appointment scheduling, and pharmacy inventory. It leverages AI to provide smart suggestions, report summarization, and a patient-facing chatbot. The application features a modern, clean, and intuitive user interface, with role-based access control to ensure that users only see the information relevant to them.
+## Project Structure & Architecture
+- **Framework:** Next.js (App Router)
+- **Styling:** Tailwind CSS (Modern, Clean Aesthetics with fluid gradients, shadows, and spacing)
+- **Database / Auth:** Firebase (Firestore, Auth)
 
-## Architecture and Design
+### Existing Features & Styles
+- **Firebase Authentication & Global State:** Real authentication flow utilizing Firebase SDK `createUserWithEmailAndPassword` and `signInWithEmailAndPassword`. A global `AuthProvider` securely guards all dashboard routes.
+- **Role-Based Routing Constraints:** Users are strictly separated by roles (`admin`, `doctor`, `patient`). The `Dashboard.tsx` root routes users to their respective component natively.
+- **Firestore Subcollections:** Medical records are stored efficiently under `{patients}/{id}/medicalRecords` to enforce strict ownership and simplified querying. 
+- **Doctor Dashboard:** Focuses on patient management using card-based layout grids to display patient records, linked securely to the doctor's roster via `userId`.
+- **Patient Dashboard & Timeline:** Grants insight for individuals to view their personal upcoming appointments and medical history timeline securely bound to their `auth.uid`.
+- **Aesthetic Overhaul:** Fully modernized Landing Page, Authentication, and Dashboards integrating Tailwind plugins for smooth CSS animations, loading skeletons, and interactive states.
+- **Robust Error Handling:** Every async Firebase hook uses strict try/catch bindings that safely render elegant UI Empty States or Error Toasts when configurations mismatch or permissions fail.
 
-*   **Frontend:** Next.js with React (`/app` router)
-*   **Styling:** Tailwind CSS
-*   **Backend:** Next.js API Routes (planned)
-*   **Database:** Firebase Firestore
-*   **Authentication:** Firebase Auth (role-based)
-*   **AI:** Gemini API (planned)
+## Current Requested Change Plan
+**Goal:** Transition the platform from mock/static data to a fully functional Firebase-backed environment and deploy a massive typography/UX modernization.
 
-## Implemented Features
-
-### Core Application Structure
-*   **Project Setup:** Next.js project initialized and configured.
-*   **Firebase Integration:** Firebase SDK and environment variables are set up.
-*   **Styling:** Global styles and Tailwind CSS are configured for a consistent and modern look and feel.
-
-### Authentication
-*   **User Signup and Login:** Users can create accounts and log in with email and password.
-*   **Role-Based Access Control (RBAC):** Users are assigned roles (Admin, Doctor, Patient) upon registration.
-*   **Authentication Context:** A React Context (`AuthProvider`) provides authentication state to the entire application.
-
-### Dashboards
-*   **Dynamic Dashboard Routing:** The main dashboard page dynamically renders the appropriate dashboard based on the user's role.
-*   **Admin Dashboard:**
-    *   Displays a list of all users in the system.
-    *   Includes a search functionality to filter users by name or email.
-*   **Doctor Dashboard:**
-    *   Displays a list of patients assigned to the doctor.
-    *   Includes a search functionality to filter patients.
-    *   Provides a "View Records" button to navigate to a patient's detailed medical history.
-*   **Patient Dashboard:**
-    *   Displays the patient's upcoming appointments.
-    -   Shows a summary of their medical history.
-    *   Includes a button to book a new appointment.
-
-### Patient Management
-*   **Patient Detail Page:** A dedicated page to view a patient's complete medical history and personal information.
-*   **Add Medical Records:** Doctors can add new medical records to a patient's history through a form on the patient detail page.
-
-## Future Development Plan
-
-### Phase 1: Database Implementation
-*   Replace mock data with real-time data from Firebase Firestore.
-*   Implement Firestore security rules to ensure data privacy and integrity.
-*   Connect the "Add Medical Record" functionality to Firestore.
-*   Connect the user list in the Admin Dashboard to Firestore.
-
-### Phase 2: Appointment Management
-*   Implement the "Book New Appointment" functionality for patients.
-*   Create a calendar view for doctors to see their scheduled appointments.
-*   Send appointment confirmation and reminder notifications.
-
-### Phase 3: AI-Powered Features
-*   Integrate the Gemini API to create an AI-powered chatbot for patient support.
-*   Use AI to summarize patient medical records for doctors.
-*   Develop a feature for AI-assisted diagnosis based on reported symptoms.
-
-### Phase 4: Pharmacy and Inventory
-*   Create a module for managing the hospital's pharmacy and inventory.
-*   Implement low-stock and expiry alerts.
+### Completed Execution Plan
+- **Step 1:** Eradicated all mock data functions. Initialized `firebase.js` modularly. Overhauled `auth.js` to map real user sessions from Firebase.
+- **Step 2:** Refactored the Database interface. `DoctorDashboard` fetches patients safely. `PatientDashboard` fetches specific user timelines. `patients/[id]/page.tsx` renders dynamic patient subcollections and has a working "Add Record" secure mutation limit.
+- **Step 3:** Executed an entire System-wide UX/UI overhaul leveraging Tailwind constraints, emphasizing spacing, typography, gradients, loading spinners, input lockouts, and soft shadows throughout.

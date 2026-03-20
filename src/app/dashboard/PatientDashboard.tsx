@@ -1,77 +1,343 @@
 'use client';
 
-import { useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { useState, useEffect } from 'react';
+import { useAuth } from '../../lib/auth';
+import { db } from '../../lib/firebase';
+import { collection, query, getDocs, orderBy, doc, getDoc, where, addDoc, serverTimestamp } from 'firebase/firestore';
 
-const mockAppointments = [
-  {
-    id: '1',
-    doctor: 'Dr. Smith',
-    date: '2023-11-15',
-    time: '10:00 AM',
-    status: 'Confirmed',
-  },
-  {
-    id: '2',
-    doctor: 'Dr. Jones',
-    date: '2023-11-20',
-    time: '2:30 PM',
-    status: 'Pending',
-  },
-];
+interface PatientDoc {
+  id: string;
+  name?: string;
+  email?: string;
+  phone?: string;
+  userId?: string;
+}
 
-const mockMedicalHistory = [
-  {
-    id: '1',
-    date: '2023-10-26',
-    diagnosis: 'Common Cold',
-    prescription: 'Rest and fluids',
-  },
-  {
-    id: '2',
-    date: '2023-08-12',
-    diagnosis: 'Allergies',
-    prescription: 'Antihistamines',
-  },
-];
+interface MedicalRecord {
+  id: string;
+  date?: string;
+  diagnosis?: string;
+  doctor?: string;
+  notes?: string;
+}
+
+interface Doctor {
+  id: string;
+  name?: string;
+  email?: string;
+}
+
+interface Appointment {
+  id: string;
+  patientId: string;
+  patientName: string;
+  doctorId: string;
+  doctorName: string;
+  date: string;
+  time: string;
+  status: 'pending' | 'scheduled' | 'completed' | 'cancelled';
+  notes: string;
+  createdAt?: unknown;
+}
 
 export default function PatientDashboard() {
-  const [appointments, setAppointments] = useState(mockAppointments);
-  const [medicalHistory, setMedicalHistory] = useState(mockMedicalHistory);
-  const router = useRouter();
+  const { user } = useAuth();
+  const [patientDoc, setPatientDoc] = useState<PatientDoc | null>(null);
+  const [records, setRecords] = useState<MedicalRecord[]>([]);
+  const [doctors, setDoctors] = useState<Doctor[]>([]);
+  const [appointments, setAppointments] = useState<Appointment[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  // Modal State
+  const [showModal, setShowModal] = useState(false);
+  const [booking, setBooking] = useState(false);
+  const [apptError, setApptError] = useState('');
+  const [newAppt, setNewAppt] = useState({ doctorId: '', date: '', time: '', notes: '' });
+
+  useEffect(() => {
+    if (!user) return;
+
+    const fetchData = async () => {
+      try {
+        setLoading(true);
+
+        // 1. Fetch Patient Document
+        const patientRef = doc(db, 'patients', user.uid);
+        const pSnap = await getDoc(patientRef);
+        
+        let pData = {
+          name: user.name || user.email?.split('@')[0] || 'Unknown Patient',
+          email: user.email || 'Unlisted',
+          phone: 'Unlisted'
+        };
+
+        if (pSnap.exists()) {
+          pData = { ...pData, ...(pSnap.data() as Partial<PatientDoc>) };
+        }
+        setPatientDoc({ id: user.uid, ...pData });
+        
+        // 2. Fetch Medical Records
+        const recordsRef = collection(db, 'patients', user.uid, 'medicalRecords');
+        const rQuery = query(recordsRef, orderBy('date', 'desc'));
+        const rSnap = await getDocs(rQuery);
+        
+        const fetchedRecords: MedicalRecord[] = [];
+        rSnap.forEach(snapDoc => {
+          fetchedRecords.push({ id: snapDoc.id, ...(snapDoc.data() as Omit<MedicalRecord, 'id'>) });
+        });
+        setRecords(fetchedRecords);
+
+        // 3. Fetch Doctors List
+        try {
+          const qDoc = query(collection(db, 'users'), where('role', '==', 'doctor'));
+          const dSnap = await getDocs(qDoc);
+          const docsFound: Doctor[] = [];
+          dSnap.forEach(d => docsFound.push({ id: d.id, ...d.data() as Doctor }));
+          setDoctors(docsFound);
+        } catch(e) { console.error("Error fetching available doctors", e); } // Rules fail-safe if doctor filtering blocked
+
+        // 4. Fetch Appointments
+        const qAppt = query(collection(db, 'appointments'), where('patientId', '==', user.uid));
+        const aSnap = await getDocs(qAppt);
+        const apptsFound: Appointment[] = [];
+        aSnap.forEach(a => apptsFound.push({ id: a.id, ...a.data() as Appointment }));
+        
+        // Local sort (date + time desc)
+        apptsFound.sort((a,b) => (b.date + b.time).localeCompare(a.date + a.time));
+        setAppointments(apptsFound);
+
+      } catch (err: unknown) {
+        console.error("Error fetching data:", err);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchData();
+  }, [user]);
+
+  const handleBook = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setApptError('');
+
+    if (!newAppt.doctorId || !newAppt.date || !newAppt.time) {
+      setApptError("Please select a doctor, date, and time.");
+      return;
+    }
+
+    const selectedDateTime = new Date(`${newAppt.date}T${newAppt.time}`);
+    if (selectedDateTime < new Date()) {
+      setApptError("Cannot book appointments in the past.");
+      return;
+    }
+
+    setBooking(true);
+    try {
+      // Slot validation logically scoping exact conflicts manually matching composite indexing limits.
+      const qConflict = query(collection(db, 'appointments'), where('doctorId', '==', newAppt.doctorId), where('date', '==', newAppt.date));
+      const conflictSnap = await getDocs(qConflict);
+      
+      const hasConflict = conflictSnap.docs.some(docData => {
+        const data = docData.data();
+        return data.time === newAppt.time && data.status === 'scheduled';
+      });
+
+      if (hasConflict) {
+        setApptError("This specific time slot is already scheduled with the doctor. Choose another.");
+        setBooking(false);
+        return;
+      }
+
+      const docObj = doctors.find(d => d.id === newAppt.doctorId);
+      const payload: Omit<Appointment, 'id'> = {
+        patientId: user.uid,
+        patientName: patientDoc?.name || 'Patient',
+        doctorId: newAppt.doctorId,
+        doctorName: docObj?.name || 'Doctor',
+        date: newAppt.date,
+        time: newAppt.time,
+        status: 'pending',
+        notes: newAppt.notes,
+        createdAt: serverTimestamp()
+      };
+
+      const docRef = await addDoc(collection(db, 'appointments'), payload);
+      setAppointments(prev => [{ id: docRef.id, ...(payload as Omit<Appointment, 'id'>) } as Appointment, ...prev].sort((a,b) => (b.date + b.time).localeCompare(a.date + a.time)));
+      setShowModal(false);
+      setNewAppt({ doctorId: '', date: '', time: '', notes: '' });
+    } catch (err: unknown) {
+      console.error(err);
+      setApptError("Failure dispatching scheduling request.");
+    } finally {
+      setBooking(false);
+    }
+  };
+
+  const getStatusBadge = (status: string) => {
+    switch (status) {
+      case 'pending': return <span className="px-3 py-1 rounded-full bg-yellow-100 text-yellow-800 text-xs font-bold uppercase tracking-wider">Pending</span>;
+      case 'scheduled': return <span className="px-3 py-1 rounded-full bg-blue-100 text-blue-800 text-xs font-bold uppercase tracking-wider">Scheduled</span>;
+      case 'completed': return <span className="px-3 py-1 rounded-full bg-green-100 text-green-800 text-xs font-bold uppercase tracking-wider">Completed</span>;
+      case 'cancelled': return <span className="px-3 py-1 rounded-full bg-red-100 text-red-800 text-xs font-bold uppercase tracking-wider">Cancelled</span>;
+      default: return null;
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <div className="w-12 h-12 border-4 border-blue-200 border-t-blue-600 rounded-full animate-spin"></div>
+      </div>
+    );
+  }
 
   return (
-    <div className="min-h-screen bg-gray-100 p-8">
-      <div className="max-w-6xl mx-auto">
-        <h1 className="text-3xl font-bold text-gray-800 mb-6">Patient Dashboard</h1>
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-          {/* Appointments Section */}
-          <div className="bg-white rounded-lg shadow-md p-6">
-            <h2 className="text-2xl font-bold text-gray-800 mb-4">Your Appointments</h2>
-            <button className="w-full bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-4 rounded mb-4">Book New Appointment</button>
-            <div className="space-y-4">
-              {appointments.map(appointment => (
-                <div key={appointment.id} className="p-4 rounded-lg border border-gray-200">
-                  <p className="font-bold">Dr. {appointment.doctor}</p>
-                  <p>{appointment.date} at {appointment.time}</p>
-                  <p>Status: <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${appointment.status === 'Confirmed' ? 'bg-green-100 text-green-800' : 'bg-yellow-100 text-yellow-800'}`}>{appointment.status}</span></p>
-                </div>
-              ))}
+    <div className="min-h-screen bg-gray-50 py-10">
+      <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8">
+        <header className="mb-10 flex flex-col sm:flex-row justify-between sm:items-end gap-6">
+          <div>
+            <h1 className="text-3xl font-bold text-gray-900 mb-2">
+              Welcome, {patientDoc?.name?.split(' ')[0] || 'Patient'}
+            </h1>
+            <p className="text-gray-600">Here is your clinical dashboard and schedules.</p>
+          </div>
+          <button 
+            onClick={() => setShowModal(true)}
+            className="bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 px-6 rounded-lg shadow-md transition-colors whitespace-nowrap"
+          >
+            + Book Appointment
+          </button>
+        </header>
+
+        {/* Modal Override Block */}
+        {showModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
+            <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg overflow-hidden border border-gray-100">
+              <div className="p-6 border-b border-gray-100 flex justify-between items-center">
+                <h2 className="text-xl font-bold text-gray-900">Schedule Appointment</h2>
+                <button onClick={() => setShowModal(false)} className="text-gray-400 hover:text-gray-600 text-2xl leading-none">&times;</button>
+              </div>
+              <div className="p-6">
+                {apptError && <div className="mb-4 p-3 bg-red-50 border border-red-200 text-red-700 text-sm rounded-lg">{apptError}</div>}
+                <form onSubmit={handleBook} className="space-y-5">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Select Physician</label>
+                    <select 
+                      className="w-full border border-gray-300 rounded-lg px-4 py-2 bg-white focus:ring-2 focus:ring-blue-600 outline-none"
+                      value={newAppt.doctorId}
+                      onChange={e => setNewAppt({...newAppt, doctorId: e.target.value})}
+                      disabled={booking}
+                    >
+                      <option value="">-- Choose a Doctor --</option>
+                      {doctors.map(d => <option key={d.id} value={d.id}>Dr. {d.name}</option>)}
+                    </select>
+                  </div>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">Date</label>
+                      <input 
+                        type="date" 
+                        className="w-full border border-gray-300 rounded-lg px-4 py-2 bg-white focus:ring-2 focus:ring-blue-600 outline-none"
+                        value={newAppt.date}
+                        min={new Date().toISOString().split('T')[0]}
+                        onChange={e => setNewAppt({...newAppt, date: e.target.value})}
+                        disabled={booking}
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">Time</label>
+                      <input 
+                        type="time" 
+                        className="w-full border border-gray-300 rounded-lg px-4 py-2 bg-white focus:ring-2 focus:ring-blue-600 outline-none"
+                        value={newAppt.time}
+                        onChange={e => setNewAppt({...newAppt, time: e.target.value})}
+                        disabled={booking}
+                      />
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Reason / Notes</label>
+                    <textarea 
+                      className="w-full border border-gray-300 rounded-lg px-4 py-2 bg-white focus:ring-2 focus:ring-blue-600 outline-none resize-none"
+                      rows={3}
+                      value={newAppt.notes}
+                      onChange={e => setNewAppt({...newAppt, notes: e.target.value})}
+                      disabled={booking}
+                      placeholder="Symptoms, requests, etc."
+                    ></textarea>
+                  </div>
+                  <div className="pt-2 flex gap-3">
+                    <button type="button" onClick={() => setShowModal(false)} disabled={booking} className="w-full py-2 px-4 border border-gray-300 text-gray-700 font-medium rounded-lg hover:bg-gray-50 transition-colors">Cancel</button>
+                    <button type="submit" disabled={booking} className="w-full py-2 px-4 bg-blue-600 text-white font-medium rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50">
+                      {booking ? 'Reserving...' : 'Confirm'}
+                    </button>
+                  </div>
+                </form>
+              </div>
             </div>
           </div>
-          {/* Medical History Section */}
-          <div className="bg-white rounded-lg shadow-md p-6">
-            <h2 className="text-2xl font-bold text-gray-800 mb-4">Medical History</h2>
-            <div className="space-y-4">
-              {medicalHistory.map(record => (
-                <div key={record.id} className="p-4 rounded-lg border border-gray-200">
-                  <p className="font-bold">{record.date}</p>
-                  <p><span className="font-semibold">Diagnosis:</span> {record.diagnosis}</p>
-                  <p><span className="font-semibold">Prescription:</span> {record.prescription}</p>
+        )}
+
+        <div className="space-y-8">
+          
+          {/* Active Appointments Layer */}
+          <section>
+            <h2 className="text-xl font-bold text-gray-900 mb-4 border-b border-gray-200 pb-2">Upcoming Appointments</h2>
+            {appointments.length === 0 ? (
+                <div className="bg-white rounded-xl shadow-md p-10 text-center border border-gray-100">
+                  <p className="text-gray-500">You currently have no scheduled appointments.</p>
                 </div>
-              ))}
-            </div>
-          </div>
+            ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {appointments.map(appt => (
+                    <div key={appt.id} className="bg-white rounded-xl shadow-md p-5 border border-gray-100 flex flex-col gap-3">
+                      <div className="flex justify-between items-start">
+                        <div className="font-bold text-gray-900 text-lg">Dr. {appt.doctorName}</div>
+                        {getStatusBadge(appt.status)}
+                      </div>
+                      <div className="text-gray-600 font-medium flex gap-4 text-sm bg-gray-50 p-3 rounded-lg border border-gray-200">
+                         <span>📅 {appt.date}</span>
+                         <span>⏰ {appt.time}</span>
+                      </div>
+                      {appt.notes && <p className="text-gray-500 text-sm mt-1 flex-1">{appt.notes}</p>}
+                    </div>
+                  ))}
+                </div>
+            )}
+          </section>
+
+          {/* Medical Timeline Array View */}
+          <section>
+            <h2 className="text-xl font-bold text-gray-900 mb-4 border-b border-gray-200 pb-2">Medical Timeline</h2>
+            {records.length === 0 ? (
+              <div className="bg-white rounded-xl shadow-md p-12 text-center border border-gray-100">
+                <div className="text-gray-400 mb-4 flex justify-center">
+                  <svg className="w-16 h-16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
+                </div>
+                <h3 className="text-lg font-medium text-gray-900 mb-1">No records yet</h3>
+                <p className="text-gray-500">Your medical history is currently empty.</p>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                {records.map(record => (
+                  <div key={record.id} className="bg-white rounded-xl shadow-md p-6 border border-gray-100">
+                    <div className="flex flex-col sm:flex-row justify-between mb-4">
+                      <div>
+                        <span className="inline-block px-3 py-1 bg-blue-50 text-blue-700 text-sm font-semibold rounded-lg mb-2">
+                          {record.date}
+                        </span>
+                        <h3 className="text-xl font-bold text-gray-900">{record.diagnosis}</h3>
+                      </div>
+                      <div className="text-gray-600 font-medium mt-2 sm:mt-0">
+                        {record.doctor}
+                      </div>
+                    </div>
+                    <p className="text-gray-700 leading-relaxed whitespace-pre-wrap">{record.notes}</p>
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
         </div>
       </div>
     </div>

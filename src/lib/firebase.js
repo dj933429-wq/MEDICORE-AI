@@ -1,5 +1,4 @@
-
-import { initializeApp } from "firebase/app";
+import { initializeApp, getApps, getApp } from "firebase/app";
 import { getAuth } from "firebase/auth";
 import { getFirestore } from "firebase/firestore";
 
@@ -12,7 +11,18 @@ const firebaseConfig = {
   appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID,
 };
 
-const app = initializeApp(firebaseConfig);
+let app;
+
+// Safely initialize Firebase to prevent client-side hot-reload crashes, adding strict error messages without halting Node natively.
+if (!getApps().length) {
+  if (!firebaseConfig.apiKey) {
+    console.error("Firebase Critical Error: api key is missing. Ensure .env.local is injected securely.");
+  }
+  app = initializeApp(firebaseConfig);
+} else {
+  app = getApp();
+}
+
 const auth = getAuth(app);
 const db = getFirestore(app);
 
