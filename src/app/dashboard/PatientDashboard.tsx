@@ -16,8 +16,10 @@ interface PatientDoc {
 interface MedicalRecord {
   id: string;
   date?: string;
+  createdAt?: any;
   diagnosis?: string;
   doctor?: string;
+  medicines?: string;
   notes?: string;
 }
 
@@ -93,13 +95,21 @@ export default function PatientDashboard() {
         
         // 2. Fetch Medical Records
         const recordsRef = collection(db, 'patients', user.uid, 'medicalRecords');
-        const rQuery = query(recordsRef, orderBy('date', 'desc'));
+        const rQuery = query(recordsRef, orderBy('createdAt', 'desc'));
         const rSnap = await getDocs(rQuery);
         
         const fetchedRecords: MedicalRecord[] = [];
         rSnap.forEach(snapDoc => {
-          fetchedRecords.push({ id: snapDoc.id, ...(snapDoc.data() as Omit<MedicalRecord, 'id'>) });
+          fetchedRecords.push({ ...(snapDoc.data() as Omit<MedicalRecord, 'id'>), id: snapDoc.id });
         });
+        
+        // Secondary sort fallback in case missing index returns arbitrary ordering
+        fetchedRecords.sort((a,b) => {
+           const timeA = a.createdAt?.seconds || 0;
+           const timeB = b.createdAt?.seconds || 0;
+           return timeB - timeA;
+        });
+        
         setRecords(fetchedRecords);
 
         // 3. Fetch Doctors List
@@ -107,7 +117,7 @@ export default function PatientDashboard() {
           const qDoc = query(collection(db, 'users'), where('role', '==', 'doctor'));
           const dSnap = await getDocs(qDoc);
           const docsFound: Doctor[] = [];
-          dSnap.forEach(d => docsFound.push({ id: d.id, ...d.data() as Doctor }));
+          dSnap.forEach(d => docsFound.push({ ...(d.data() as Doctor), id: d.id }));
           setDoctors(docsFound);
         } catch(e) { console.error("Error fetching available doctors", e); } // Rules fail-safe if doctor filtering blocked
 
@@ -115,7 +125,7 @@ export default function PatientDashboard() {
         const qAppt = query(collection(db, 'appointments'), where('patientId', '==', user.uid));
         const aSnap = await getDocs(qAppt);
         const apptsFound: Appointment[] = [];
-        aSnap.forEach(a => apptsFound.push({ id: a.id, ...a.data() as Appointment }));
+        aSnap.forEach(a => apptsFound.push({ ...a.data(), id: a.id } as Appointment));
         
         // Local sort (date + time desc)
         apptsFound.sort((a,b) => (b.date + b.time).localeCompare(a.date + a.time));
@@ -369,7 +379,7 @@ export default function PatientDashboard() {
                     <div className="flex flex-col sm:flex-row justify-between mb-4">
                       <div>
                         <span className="inline-block px-3 py-1 bg-blue-50 text-blue-700 text-sm font-semibold rounded-lg mb-2">
-                          {record.date}
+                          {record.createdAt ? record.createdAt.toDate().toLocaleDateString() : (record.date || 'Unknown Date')}
                         </span>
                         <h3 className="text-xl font-bold text-gray-900">{record.diagnosis}</h3>
                       </div>
@@ -377,6 +387,7 @@ export default function PatientDashboard() {
                         {record.doctor}
                       </div>
                     </div>
+                    {record.medicines && <p className="text-gray-900 font-medium my-2 bg-blue-50/50 p-3 rounded-lg border border-blue-100/50">Medicines: <span className="font-normal">{record.medicines}</span></p>}
                     <p className="text-gray-700 leading-relaxed whitespace-pre-wrap">{record.notes}</p>
                   </div>
                 ))}
