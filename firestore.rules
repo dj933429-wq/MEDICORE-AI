@@ -7,13 +7,13 @@ service cloud.firestore {
       allow write: if request.auth != null && request.auth.uid == userId;
     }
     match /patients/{patientId} {
-      // Patients collection requires user authorization mapping to the creator
-      allow read, update, delete: if request.auth != null && resource.data.userId == request.auth.uid;
-      allow create: if request.auth != null && request.resource.data.userId == request.auth.uid;
+      // Patients collection requires user authorization mapping to the creator or assigned doctor
+      allow read, update, delete: if request.auth != null && (resource.data.userId == request.auth.uid || resource.data.doctorId == request.auth.uid);
+      allow create: if request.auth != null && (request.resource.data.userId == request.auth.uid || request.resource.data.doctorId == request.auth.uid);
       
       match /medicalRecords/{recordId} {
-      	// Must inherit the parent patient's userId check tightly
-        allow read, write: if request.auth != null && get(/databases/$(database)/documents/patients/$(patientId)).data.userId == request.auth.uid;
+      	// Must inherit the parent patient's userId or doctorId check tightly
+        allow read, write: if request.auth != null && (get(/databases/$(database)/documents/patients/$(patientId)).data.userId == request.auth.uid || get(/databases/$(database)/documents/patients/$(patientId)).data.doctorId == request.auth.uid);
       }
     }
     
