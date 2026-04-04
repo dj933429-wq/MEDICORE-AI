@@ -3,18 +3,27 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
     match /users/{userId} {
-      allow read: if request.auth != null && resource.data.role == "doctor";
+      allow read: if request.auth != null && (resource.data.role == "doctor" || resource.data.role == "patient" || resource.data.role == "pharmacist");
       allow write: if request.auth != null && request.auth.uid == userId;
     }
     match /patients/{patientId} {
-      // Patients collection requires user authorization mapping to the creator or assigned doctor
-      allow read, update, delete: if request.auth != null && (resource.data.userId == request.auth.uid || resource.data.doctorId == request.auth.uid);
+      // Patients collection requires user authorization mapping to the creator or assigned doctor, or pharmacist
+      allow read: if request.auth != null && (resource.data.userId == request.auth.uid || resource.data.doctorId == request.auth.uid || get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == "pharmacist");
+      allow update, delete: if request.auth != null && (resource.data.userId == request.auth.uid || resource.data.doctorId == request.auth.uid);
       allow create: if request.auth != null && (request.resource.data.userId == request.auth.uid || request.resource.data.doctorId == request.auth.uid);
       
       match /medicalRecords/{recordId} {
       	// Must inherit the parent patient's userId or doctorId check tightly
         allow read, write: if request.auth != null && (get(/databases/$(database)/documents/patients/$(patientId)).data.userId == request.auth.uid || get(/databases/$(database)/documents/patients/$(patientId)).data.doctorId == request.auth.uid);
       }
+      
+      match /bills/{billId} {
+        allow read, write: if request.auth != null && (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == "pharmacist" || get(/databases/$(database)/documents/patients/$(patientId)).data.userId == request.auth.uid || get(/databases/$(database)/documents/patients/$(patientId)).data.doctorId == request.auth.uid);
+      }
+    }
+    
+    match /bills/{billId} {
+      allow read, write: if request.auth != null;
     }
     
     match /appointments/{appointmentId} {

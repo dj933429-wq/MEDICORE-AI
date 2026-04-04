@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '../../lib/auth';
 import { db } from '../../lib/firebase';
-import { collection, query, getDocs, where, doc, updateDoc, addDoc, serverTimestamp, orderBy } from 'firebase/firestore';
+import { collection, query, getDocs, where, doc, getDoc, updateDoc, addDoc, serverTimestamp, orderBy } from 'firebase/firestore';
 
 interface Patient {
   id: string;
@@ -52,37 +52,41 @@ export default function DoctorDashboard() {
     const fetchDashboardData = async () => {
       try {
         setLoading(true);
-        // Fetch Assigned Patients
-        const qPatients = query(
-          collection(db, 'patients'),
-          where('role', '==', 'patient'),
-          where('doctorId', '==', user.uid)
-        );
-        const querySnapshot = await getDocs(qPatients);
-        const fetchedPatients: Patient[] = [];
         
-        await Promise.all(
-          querySnapshot.docs.map(async (docSnap) => {
-             const pData = { ...docSnap.data(), id: docSnap.id } as Patient;
-             const rSnap = await getDocs(query(collection(db, `patients/${docSnap.id}/medicalRecords`), orderBy('createdAt', 'desc')));
-             const recs: any[] = [];
-             rSnap.forEach(r => recs.push({ ...r.data(), id: r.id }));
-             pData.records = recs;
-             fetchedPatients.push(pData);
-          })
-        );
-        
-        setPatients(fetchedPatients);
-
-        // Fetch Appointments mapped to this specific Doctor
+        // 1. Fetch Appointments explicitly mapped to this Doctor First
         const qAppt = query(collection(db, 'appointments'), where('doctorId', '==', user.uid));
         const aSnap = await getDocs(qAppt);
         const apptsFound: Appointment[] = [];
         aSnap.forEach(a => apptsFound.push({ ...a.data(), id: a.id } as Appointment));
         
-        // Sort effectively chronologically backwards
-        apptsFound.sort((a,b) => (a.date + a.time).localeCompare(b.date + b.time));
+        apptsFound.sort((a,b) => (b.date + b.time).localeCompare(a.date + a.time));
         setAppointments(apptsFound);
+
+        // 2. Extract Unique Patient IDs off derived history securely
+        const completedAppts = apptsFound.filter(a => a.status === 'completed' || a.recordAdded);
+        const patientIds = [...new Set(completedAppts.map(a => a.patientId))];
+
+        // 3. Fetch core Patient Models independently
+        const fetchedPatients: Patient[] = [];
+        
+        await Promise.all(
+          patientIds.map(async (pId) => {
+             let docSnap = await getDoc(doc(db, 'patients', pId));
+             if (!docSnap.exists()) {
+                 docSnap = await getDoc(doc(db, 'users', pId));
+             }
+             if (docSnap.exists()) {
+                 const pData = { ...docSnap.data(), id: docSnap.id } as Patient;
+                 const rSnap = await getDocs(query(collection(db, `patients/${pId}/medicalRecords`), orderBy('createdAt', 'desc')));
+                 const recs: any[] = [];
+                 rSnap.forEach(r => recs.push({ ...r.data(), id: r.id }));
+                 pData.records = recs;
+                 fetchedPatients.push(pData);
+             }
+          })
+        );
+        
+        setPatients(fetchedPatients);
       } catch (err: unknown) {
         console.error("Error fetching doctor components:", err);
       } finally {
@@ -97,6 +101,17 @@ export default function DoctorDashboard() {
     try {
       const apptRef = doc(db, 'appointments', apptId);
       await updateDoc(apptRef, { status: newStatus });
+      
+      const appt = appointments.find(a => a.id === apptId);
+      if (appt && (newStatus === 'scheduled' || newStatus === 'completed')) {
+        try {
+          await updateDoc(doc(db, 'patients', appt.patientId), { doctorId: user?.uid });
+          await updateDoc(doc(db, 'users', appt.patientId), { doctorId: user?.uid });
+        } catch (linkErr) {
+          console.error("Failed to link patient bounds", linkErr);
+        }
+      }
+
       setAppointments(appointments.map(a => a.id === apptId ? { ...a, status: newStatus } : a));
     } catch (err) {
       console.error("Status update execution failed:", err);
@@ -119,6 +134,13 @@ export default function DoctorDashboard() {
       
       const apptRef = doc(db, 'appointments', selectedApptId);
       await updateDoc(apptRef, { status: 'completed', recordAdded: true });
+      
+      try {
+        await updateDoc(doc(db, 'patients', selectedPatientId), { doctorId: user?.uid });
+        await updateDoc(doc(db, 'users', selectedPatientId), { doctorId: user?.uid });
+      } catch (linkErr) {
+        console.error("Failed to map patient on complete.", linkErr);
+      }
       
       setAppointments(appointments.map(a => a.id === selectedApptId ? { ...a, status: 'completed', recordAdded: true } : a));
       
@@ -158,7 +180,8 @@ export default function DoctorDashboard() {
     return true; // All
   });
 
-  const processedPatients = patients.filter(p => p.role === 'patient' && p.doctorId === user.uid);
+  // Display locally mapped data directly.
+  const processedPatients = patients;
 
   const getStatusBadge = (status: string) => {
     switch (status) {

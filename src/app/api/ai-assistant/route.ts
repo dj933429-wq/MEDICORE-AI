@@ -1,7 +1,42 @@
 import { medicalDatabase } from "@/lib/medicalData";
 
+const RATE_LIMIT = 15;
+const WINDOW = 60 * 1000; // 1 minute
+
+const ipRequests: Record<string, number[]> = {};
+
+function rateLimiter(ip: string) {
+  const now = Date.now();
+
+  if (!ipRequests[ip]) {
+    ipRequests[ip] = [];
+  }
+
+  ipRequests[ip] = ipRequests[ip].filter(
+    (time) => now - time < WINDOW
+  );
+
+  if (ipRequests[ip].length >= RATE_LIMIT) {
+    return false;
+  }
+
+  ipRequests[ip].push(now);
+  return true;
+}
+
 export async function POST(req: Request) {
   try {
+    const ip = req.headers.get("x-forwarded-for") || "unknown";
+
+    if (!rateLimiter(ip)) {
+      return new Response(
+        JSON.stringify({
+          error: "Too many requests. Please wait."
+        }),
+        { status: 429, headers: { 'Content-Type': 'application/json' } }
+      );
+    }
+
     const body = await req.json();
     // Use the original message for the prompt, convert to lowercase for searching
     const originalMessage = body.message || "";
