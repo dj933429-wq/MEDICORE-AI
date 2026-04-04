@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation';
 import Tesseract from "tesseract.js";
 import { useAuth } from '../../../lib/auth';
 import { db } from '../../../lib/firebase';
-import { collection, addDoc, getDocs, query, orderBy } from 'firebase/firestore';
+import { collection, addDoc, getDocs, query, orderBy, where, serverTimestamp, updateDoc, deleteDoc, doc } from 'firebase/firestore';
 
 interface Medicine {
   id: string;
@@ -14,6 +14,30 @@ interface Medicine {
   expiry: string;
   stock: number;
 }
+
+interface Patient {
+  id: string;
+  firstName?: string;
+  lastName?: string;
+  name?: string;
+  email?: string;
+}
+
+interface BillItem {
+  id: string;
+  name: string;
+  price: number;
+  quantity: number;
+  total: number;
+  medicineId: string;
+}
+
+const formatINR = (amount: number) => {
+  return new Intl.NumberFormat("en-IN", {
+    style: "currency",
+    currency: "INR"
+  }).format(amount);
+};
 
 export default function PharmacistDashboard() {
   const { user, loading } = useAuth();
@@ -67,9 +91,46 @@ export default function PharmacistDashboard() {
         router.push('/dashboard');
       } else {
         fetchInventory();
+        fetchPatients();
       }
     }
   }, [user, loading, router]);
+
+  // Billing State
+  const [patients, setPatients] = useState<Patient[]>([]);
+  const [selectedPatient, setSelectedPatient] = useState("");
+  const [billItems, setBillItems] = useState<BillItem[]>([]);
+  const [totalAmount, setTotalAmount] = useState(0);
+  const [selectedMedicine, setSelectedMedicine] = useState("");
+  const [billQuantity, setBillQuantity] = useState("");
+  const [billPrice, setBillPrice] = useState("");
+  const [isGeneratingBill, setIsGeneratingBill] = useState(false);
+
+  const fetchPatients = async () => {
+    try {
+      const q = query(collection(db, 'users'), where('role', '==', 'patient'));
+      const qs = await getDocs(q);
+      const pts: Patient[] = [];
+      qs.forEach(doc => {
+        pts.push({ id: doc.id, ...doc.data() } as Patient);
+      });
+      console.log("Fetched patients:", pts);
+      setPatients(pts);
+    } catch (err) {
+      console.error("Failed to fetch patients from users collection", err);
+      // Fallback
+      try {
+        const fbQ = query(collection(db, 'patients'), where('role', '==', 'patient'));
+        const fbSnap = await getDocs(fbQ);
+        const fbPts: Patient[] = [];
+        fbSnap.forEach(doc => fbPts.push({ id: doc.id, ...doc.data() } as Patient));
+        console.log("Fetched patients (fallback):", fbPts);
+        setPatients(fbPts);
+      } catch (e) {
+        console.error("Fallback patient fetch failed", e);
+      }
+    }
+  };
 
   const fetchInventory = async () => {
     if (!user) return;
@@ -103,6 +164,136 @@ export default function PharmacistDashboard() {
       }
     } finally {
       setIsLoadingInventory(false);
+    }
+  };
+
+  const handleEditMedicine = async (med: Medicine) => {
+    if (!user) return;
+    const newName = prompt("Edit Medicine Name:", med.name);
+    if (newName === null) return;
+    const newExpiry = prompt("Edit Expiry Date (optional YYYY-MM):", med.expiry);
+    if (newExpiry === null) return;
+    const stockStr = prompt("Edit Stock Quantity:", med.stock.toString());
+    if (stockStr === null) return;
+
+    setIsSubmitting(true);
+    try {
+      await updateDoc(doc(db, `inventory/${user.uid}/medicines`, med.id), {
+        name: newName,
+        expiry: newExpiry,
+        stock: parseInt(stockStr, 10) || 0
+      });
+      fetchInventory();
+    } catch (e) {
+      console.error(e);
+      setError("Failed to update medicine.");
+      setTimeout(() => setError(""), 3000);
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleDeleteMedicine = async (id: string) => {
+    if (!user) return;
+    if (!confirm("Are you sure you want to delete this medicine?")) return;
+    try {
+      await deleteDoc(doc(db, `inventory/${user.uid}/medicines`, id));
+      fetchInventory();
+    } catch (e) {
+      console.error(e);
+      setError("Failed to delete medicine.");
+      setTimeout(() => setError(""), 3000);
+    }
+  };
+
+  const handleUpdateStock = async (id: string, newStock: number) => {
+    if (!user || newStock < 0) return;
+    try {
+      await updateDoc(doc(db, `inventory/${user.uid}/medicines`, id), { stock: newStock });
+      fetchInventory();
+    } catch (e) { console.error(e); }
+  };
+
+  const handleAddBillItem = () => {
+    if (!selectedMedicine || !billQuantity || !billPrice) {
+      setError("Please select a medicine, quantity, and price.");
+      setTimeout(() => setError(""), 3000);
+      return;
+    }
+    const med = medicines.find(m => m.id === selectedMedicine);
+    if (!med) return;
+    
+    const qty = parseInt(billQuantity, 10);
+    const price = parseFloat(billPrice);
+    
+    if (qty <= 0 || price < 0) {
+      setError("Quantity and price must be positive.");
+      setTimeout(() => setError(""), 3000);
+      return;
+    }
+    
+    if (qty > med.stock) {
+      setError(`Warning: Quantity exceeds current stock (${med.stock}).`);
+      setTimeout(() => setError(""), 3000);
+    }
+    
+    const newItem = {
+      id: Date.now().toString(),
+      medicineId: med.id,
+      name: med.name,
+      price,
+      quantity: qty,
+      total: price * qty
+    };
+    
+    const newItems = [...billItems, newItem];
+    setBillItems(newItems);
+    setTotalAmount(newItems.reduce((sum, item) => sum + item.total, 0));
+    
+    setSelectedMedicine("");
+    setBillQuantity("");
+    setBillPrice("");
+  };
+
+  const handleGenerateBill = async () => {
+    if (!selectedPatient || billItems.length === 0) return;
+    setIsGeneratingBill(true);
+    try {
+      const billData = {
+        patientId: selectedPatient,
+        items: billItems,
+        totalAmount,
+        createdAt: serverTimestamp(),
+        pharmacistId: user?.uid
+      };
+      
+      await addDoc(collection(db, 'bills'), billData);
+      await addDoc(collection(db, `patients/${selectedPatient}/bills`), billData);
+      
+      // Auto stock reduction
+      if (user) {
+        for (const item of billItems) {
+          const med = medicines.find(m => m.id === item.medicineId);
+          if (med) {
+            const medRef = doc(db, `inventory/${user.uid}/medicines`, item.medicineId);
+            const newStock = Math.max(0, med.stock - item.quantity);
+            await updateDoc(medRef, { stock: newStock });
+          }
+        }
+        fetchInventory(); // refresh inventory
+      }
+
+      
+      setBillItems([]);
+      setTotalAmount(0);
+      setSelectedPatient("");
+      setSuccessMessage("Bill generated securely and saved!");
+      setTimeout(() => setSuccessMessage(""), 3000);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Failed to generate bill.");
+      setTimeout(() => setError(""), 3000);
+    } finally {
+      setIsGeneratingBill(false);
     }
   };
 
@@ -503,6 +694,7 @@ export default function PharmacistDashboard() {
                       <th className="pb-4 pt-1 px-4 cursor-default text-center">Batch No.</th>
                       <th className="pb-4 pt-1 px-4 cursor-default text-center">Expiry</th>
                       <th className="pb-4 pt-1 px-4 cursor-default text-right">Stock</th>
+                      <th className="pb-4 pt-1 px-4 cursor-default text-right">Actions</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-50">
@@ -544,11 +736,33 @@ export default function PharmacistDashboard() {
                             </span>
                           </td>
                           <td className="py-4 px-4 text-right">
-                            <span className={`inline-flex items-center justify-center min-w-[3rem] px-3 py-1.5 rounded-full text-sm font-bold shadow-sm ${
-                              isLowStock ? 'bg-red-100 text-red-700 border border-red-200' : 'bg-white border border-emerald-100 text-emerald-600'
-                            }`}>
-                              {med.stock}
-                            </span>
+                            <div className="flex items-center justify-end gap-1">
+                              <button 
+                                onClick={() => handleUpdateStock(med.id, Math.max(0, med.stock - 1))}
+                                className="w-7 h-7 bg-slate-100 text-slate-600 rounded-full hover:bg-slate-200 flex items-center justify-center font-bold"
+                              >-</button>
+                              <span className={`inline-flex items-center justify-center min-w-[2.5rem] px-2 py-1 rounded-md text-sm font-bold shadow-sm ${
+                                isLowStock ? 'bg-red-100 text-red-700 border border-red-200' : 'bg-white border border-emerald-100 text-emerald-600'
+                              }`}>
+                                {med.stock}
+                              </span>
+                              <button 
+                                onClick={() => handleUpdateStock(med.id, med.stock + 1)}
+                                className="w-7 h-7 bg-slate-100 text-slate-600 rounded-full hover:bg-slate-200 flex items-center justify-center font-bold pb-0.5"
+                              >+</button>
+                            </div>
+                          </td>
+                          <td className="py-4 px-4 text-right whitespace-nowrap">
+                            <div className="flex justify-end gap-2">
+                                <button
+                                  onClick={() => handleEditMedicine(med)}
+                                  className="text-blue-600 hover:text-blue-800 font-semibold text-xs px-2.5 py-1.5 bg-blue-50 hover:bg-blue-100 rounded-md transition-colors"
+                                >Edit</button>
+                                <button
+                                  onClick={() => handleDeleteMedicine(med.id)}
+                                  className="text-red-500 hover:text-red-700 font-semibold text-xs px-2.5 py-1.5 bg-red-50 hover:bg-red-100 rounded-md transition-colors"
+                                >Delete</button>
+                            </div>
                           </td>
                         </tr>
                       );
@@ -561,6 +775,130 @@ export default function PharmacistDashboard() {
           </div>
 
         </div>
+
+        {/* Billing System */}
+        <div className="bg-white rounded-3xl p-8 shadow-[0_8px_30px_rgb(0,0,0,0.04)] border border-slate-100 mt-8">
+          <div className="flex items-center justify-between mb-8">
+            <h2 className="text-2xl font-bold flex items-center gap-3">
+              <span className="w-10 h-10 rounded-full bg-indigo-50 flex items-center justify-center text-indigo-600">
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z"></path></svg>
+              </span>
+              Billing & Checkout
+            </h2>
+          </div>
+
+          <div className="grid grid-cols-1 xl:grid-cols-2 gap-8">
+            {/* Input Form */}
+            <div className="space-y-6">
+              <div>
+                <label className="block text-sm font-semibold text-slate-700 mb-2">Select Patient</label>
+                <select
+                  value={selectedPatient}
+                  onChange={(e) => setSelectedPatient(e.target.value)}
+                  className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
+                >
+                  <option value="">Select Patient</option>
+                  {patients.map(p => (
+                    <option key={p.id} value={p.id}>
+                      {p.name || p.email || "Patient"}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="p-5 bg-slate-50 border border-slate-200 rounded-2xl space-y-4">
+                <div>
+                  <label className="block text-sm font-semibold text-slate-700 mb-2">Select Medicine</label>
+                  <select
+                    value={selectedMedicine}
+                    onChange={(e) => setSelectedMedicine(e.target.value)}
+                    className="w-full px-4 py-3 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
+                  >
+                    <option value="">-- Choose Medicine --</option>
+                    {medicines.filter(m => m.stock > 0).map(m => (
+                      <option key={m.id} value={m.id}>
+                        {m.name} (Stock: {m.stock})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-semibold text-slate-700 mb-2">Quantity</label>
+                    <input
+                      type="number"
+                      min="1"
+                      value={billQuantity}
+                      onChange={(e) => setBillQuantity(e.target.value)}
+                      placeholder="Qty"
+                      className="w-full px-4 py-3 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-semibold text-slate-700 mb-2">Price per unit</label>
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={billPrice}
+                      onChange={(e) => setBillPrice(e.target.value)}
+                      placeholder="₹0.00"
+                      className="w-full px-4 py-3 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
+                    />
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={handleAddBillItem}
+                  className="w-full py-3 bg-slate-800 hover:bg-slate-900 text-white font-bold rounded-xl shadow-md transition-colors"
+                >
+                  Add Item to Bill
+                </button>
+              </div>
+            </div>
+
+            {/* Bill Summary */}
+            <div className="flex flex-col bg-slate-50 border border-slate-200 rounded-2xl p-6 min-h-[300px]">
+              <h3 className="font-bold text-slate-800 mb-4 text-lg border-b border-slate-200 pb-2">Current Bill</h3>
+              
+              {billItems.length === 0 ? (
+                <div className="flex-1 flex items-center justify-center text-slate-400 font-medium">
+                  No items added yet
+                </div>
+              ) : (
+                <div className="flex-1 overflow-y-auto space-y-3 mb-4 max-h-[300px]">
+                  {billItems.map(item => (
+                    <div key={item.id} className="flex justify-between items-center bg-white p-3 rounded-lg shadow-sm border border-slate-100">
+                      <div>
+                        <p className="font-semibold text-slate-800 text-sm">{item.name}</p>
+                        <p className="text-xs text-slate-500">{item.quantity} x {formatINR(item.price)}</p>
+                      </div>
+                      <p className="font-bold text-slate-800">{formatINR(item.total)}</p>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              <div className="border-t border-slate-200 pt-4 mt-auto">
+                <div className="flex justify-between items-center mb-6">
+                  <span className="font-bold text-slate-600">Total Amount</span>
+                  <span className="font-extrabold text-2xl text-slate-800">{formatINR(totalAmount)}</span>
+                </div>
+                
+                <button
+                  onClick={handleGenerateBill}
+                  disabled={billItems.length === 0 || !selectedPatient || isGeneratingBill}
+                  className="w-full py-4 bg-gradient-to-r from-indigo-500 to-blue-600 hover:from-indigo-600 hover:to-blue-700 text-white font-bold rounded-xl shadow-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {isGeneratingBill ? "Generating..." : "Generate Bill & Save"}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+
       </div>
     </div>
   );

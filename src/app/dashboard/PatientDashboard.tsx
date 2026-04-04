@@ -42,10 +42,24 @@ interface Appointment {
   createdAt?: unknown;
 }
 
+interface Bill {
+  id: string;
+  items: any[];
+  totalAmount: number;
+  createdAt?: any;
+}
+
 interface ChatMessage {
   role: 'user' | 'ai';
   text: string;
 }
+
+const formatINR = (amount: number) => {
+  return new Intl.NumberFormat("en-IN", {
+    style: "currency",
+    currency: "INR"
+  }).format(amount);
+};
 
 export default function PatientDashboard() {
   const { user } = useAuth();
@@ -53,6 +67,7 @@ export default function PatientDashboard() {
   const [records, setRecords] = useState<MedicalRecord[]>([]);
   const [doctors, setDoctors] = useState<Doctor[]>([]);
   const [appointments, setAppointments] = useState<Appointment[]>([]);
+  const [bills, setBills] = useState<Bill[]>([]);
   const [loading, setLoading] = useState(true);
 
   // Modal State
@@ -93,15 +108,20 @@ export default function PatientDashboard() {
         }
         setPatientDoc({ id: user.uid, ...pData });
         
-        // 2. Fetch Medical Records
-        const recordsRef = collection(db, 'patients', user.uid, 'medicalRecords');
-        const rQuery = query(recordsRef, orderBy('createdAt', 'desc'));
-        const rSnap = await getDocs(rQuery);
-        
+        console.log("Patient Data:", pData);
+
+        // 2. Fetch Medical Records (ONLY if doctorId exists)
         const fetchedRecords: MedicalRecord[] = [];
-        rSnap.forEach(snapDoc => {
-          fetchedRecords.push({ ...(snapDoc.data() as Omit<MedicalRecord, 'id'>), id: snapDoc.id });
-        });
+        
+        if ((pData as any).doctorId) {
+          const recordsRef = collection(db, 'patients', user.uid, 'medicalRecords');
+          const rQuery = query(recordsRef, orderBy('createdAt', 'desc'));
+          const rSnap = await getDocs(rQuery);
+          
+          rSnap.forEach(snapDoc => {
+            fetchedRecords.push({ ...(snapDoc.data() as Omit<MedicalRecord, 'id'>), id: snapDoc.id });
+          });
+        }
         
         // Secondary sort fallback in case missing index returns arbitrary ordering
         fetchedRecords.sort((a,b) => {
@@ -130,6 +150,16 @@ export default function PatientDashboard() {
         // Local sort (date + time desc)
         apptsFound.sort((a,b) => (b.date + b.time).localeCompare(a.date + a.time));
         setAppointments(apptsFound);
+
+        // 5. Fetch Bills
+        const billsRef = collection(db, 'patients', user.uid, 'bills');
+        const billsQuery = query(billsRef, orderBy('createdAt', 'desc'));
+        const billsSnap = await getDocs(billsQuery);
+        const fetchedBills: Bill[] = [];
+        billsSnap.forEach(docSnap => {
+          fetchedBills.push({ id: docSnap.id, ...docSnap.data() } as Bill);
+        });
+        setBills(fetchedBills);
 
       } catch (err: unknown) {
         console.error("Error fetching data:", err);
@@ -370,7 +400,7 @@ export default function PatientDashboard() {
                   <svg className="w-16 h-16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
                 </div>
                 <h3 className="text-lg font-medium text-gray-900 mb-1">No records yet</h3>
-                <p className="text-gray-500">Your medical history is currently empty.</p>
+                <p className="text-gray-500">No doctor assigned yet or no records available</p>
               </div>
             ) : (
               <div className="space-y-4">
@@ -389,6 +419,41 @@ export default function PatientDashboard() {
                     </div>
                     {record.medicines && <p className="text-gray-900 font-medium my-2 bg-blue-50/50 p-3 rounded-lg border border-blue-100/50">Medicines: <span className="font-normal">{record.medicines}</span></p>}
                     <p className="text-gray-700 leading-relaxed whitespace-pre-wrap">{record.notes}</p>
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
+
+          {/* Bills Section */}
+          <section className="mt-8">
+            <h2 className="text-xl font-bold text-gray-900 mb-4 border-b border-gray-200 pb-2">My Bills</h2>
+            {bills.length === 0 ? (
+              <div className="bg-white rounded-xl shadow-md p-10 text-center border border-gray-100">
+                <p className="text-gray-500">No billing records found.</p>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                {bills.map(bill => (
+                  <div key={bill.id} className="bg-white rounded-xl shadow-md p-6 border border-gray-100">
+                    <div className="flex justify-between items-center mb-4">
+                      <h3 className="font-bold text-gray-900 text-lg">Bill Receipt</h3>
+                      <span className="text-sm font-semibold text-gray-500 bg-gray-100 px-3 py-1 rounded-full">
+                        {bill.createdAt && typeof bill.createdAt.toDate === 'function' ? bill.createdAt.toDate().toLocaleDateString() : 'Unknown Date'}
+                      </span>
+                    </div>
+                    <ul className="mb-4 space-y-2">
+                      {bill.items.map((item, idx) => (
+                        <li key={idx} className="flex justify-between text-sm text-gray-700">
+                          <span>{item.name} (x{item.quantity})</span>
+                          <span>{formatINR(item.total)}</span>
+                        </li>
+                      ))}
+                    </ul>
+                    <div className="border-t border-gray-200 pt-3 flex justify-between items-center">
+                      <span className="font-bold text-gray-800">Total Amount</span>
+                      <span className="font-extrabold text-blue-600">{formatINR(bill.totalAmount)}</span>
+                    </div>
                   </div>
                 ))}
               </div>
