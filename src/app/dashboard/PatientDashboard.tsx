@@ -13,10 +13,16 @@ interface PatientDoc {
   userId?: string;
 }
 
+interface FirestoreTimestamp {
+  seconds?: number;
+  nanoseconds?: number;
+  toDate?: () => Date;
+}
+
 interface MedicalRecord {
   id: string;
   date?: string;
-  createdAt?: any;
+  createdAt?: FirestoreTimestamp | string | null;
   diagnosis?: string;
   doctor?: string;
   medicines?: string;
@@ -26,6 +32,9 @@ interface MedicalRecord {
 interface Doctor {
   id: string;
   name?: string;
+  specialization?: string;
+  profileImage?: string;
+  availability?: string;
   email?: string;
 }
 
@@ -42,11 +51,20 @@ interface Appointment {
   createdAt?: unknown;
 }
 
+interface BillItem {
+  id: string;
+  medicineId?: string;
+  name: string;
+  price: number;
+  quantity: number;
+  total: number;
+}
+
 interface Bill {
   id: string;
-  items: any[];
+  items: BillItem[];
   totalAmount: number;
-  createdAt?: any;
+  createdAt?: FirestoreTimestamp | string | null;
 }
 
 interface ChatMessage {
@@ -113,7 +131,7 @@ export default function PatientDashboard() {
         // 2. Fetch Medical Records (ONLY if doctorId exists)
         const fetchedRecords: MedicalRecord[] = [];
         
-        if ((pData as any).doctorId) {
+        if ((pData as PatientDoc & { doctorId?: string }).doctorId) {
           const recordsRef = collection(db, 'patients', user.uid, 'medicalRecords');
           const rQuery = query(recordsRef, orderBy('createdAt', 'desc'));
           const rSnap = await getDocs(rQuery);
@@ -125,21 +143,20 @@ export default function PatientDashboard() {
         
         // Secondary sort fallback in case missing index returns arbitrary ordering
         fetchedRecords.sort((a,b) => {
-           const timeA = a.createdAt?.seconds || 0;
-           const timeB = b.createdAt?.seconds || 0;
+           const timeA = typeof a.createdAt === 'object' && a.createdAt && 'seconds' in a.createdAt ? a.createdAt.seconds || 0 : 0;
+           const timeB = typeof b.createdAt === 'object' && b.createdAt && 'seconds' in b.createdAt ? b.createdAt.seconds || 0 : 0;
            return timeB - timeA;
         });
         
         setRecords(fetchedRecords);
 
-        // 3. Fetch Doctors List
+        // 3. Fetch Doctors List from Minimal Public Lookup Collection
         try {
-          const qDoc = query(collection(db, 'users'), where('role', '==', 'doctor'));
-          const dSnap = await getDocs(qDoc);
+          const dSnap = await getDocs(collection(db, 'publicDoctorProfiles'));
           const docsFound: Doctor[] = [];
           dSnap.forEach(d => docsFound.push({ ...(d.data() as Doctor), id: d.id }));
           setDoctors(docsFound);
-        } catch(e) { console.error("Error fetching available doctors", e); } // Rules fail-safe if doctor filtering blocked
+        } catch(e) { console.error("Error fetching available doctors from public lookup", e); }
 
         // 4. Fetch Appointments
         const qAppt = query(collection(db, 'appointments'), where('patientId', '==', user.uid));
@@ -188,14 +205,19 @@ export default function PatientDashboard() {
 
     setBooking(true);
     try {
-      // Slot validation logically scoping exact conflicts manually matching composite indexing limits.
-      const qConflict = query(collection(db, 'appointments'), where('doctorId', '==', newAppt.doctorId), where('date', '==', newAppt.date));
-      const conflictSnap = await getDocs(qConflict);
-      
-      const hasConflict = conflictSnap.docs.some(docData => {
-        const data = docData.data();
-        return data.time === newAppt.time && data.status === 'scheduled';
-      });
+      // Slot validation: attempt checking doctor scheduling conflict if permitted.
+      // Under strict rules where cross-patient queries are blocked, proceed with 'pending' status for doctor confirmation.
+      let hasConflict = false;
+      try {
+        const qConflict = query(collection(db, 'appointments'), where('doctorId', '==', newAppt.doctorId), where('date', '==', newAppt.date));
+        const conflictSnap = await getDocs(qConflict);
+        hasConflict = conflictSnap.docs.some(docData => {
+          const data = docData.data();
+          return data.time === newAppt.time && data.status === 'scheduled';
+        });
+      } catch {
+        // Query blocked by least-privilege security rules (patients cannot list appointments across other patients)
+      }
 
       if (hasConflict) {
         setApptError("This specific time slot is already scheduled with the doctor. Choose another.");
@@ -409,7 +431,7 @@ export default function PatientDashboard() {
                     <div className="flex flex-col sm:flex-row justify-between mb-4">
                       <div>
                         <span className="inline-block px-3 py-1 bg-blue-50 text-blue-700 text-sm font-semibold rounded-lg mb-2">
-                          {record.createdAt ? record.createdAt.toDate().toLocaleDateString() : (record.date || 'Unknown Date')}
+                          {record.createdAt && typeof record.createdAt === 'object' && 'toDate' in record.createdAt && typeof record.createdAt.toDate === 'function' ? record.createdAt.toDate().toLocaleDateString() : (typeof record.createdAt === 'string' ? record.createdAt : (record.date || 'Unknown Date'))}
                         </span>
                         <h3 className="text-xl font-bold text-gray-900">{record.diagnosis}</h3>
                       </div>
@@ -439,7 +461,7 @@ export default function PatientDashboard() {
                     <div className="flex justify-between items-center mb-4">
                       <h3 className="font-bold text-gray-900 text-lg">Bill Receipt</h3>
                       <span className="text-sm font-semibold text-gray-500 bg-gray-100 px-3 py-1 rounded-full">
-                        {bill.createdAt && typeof bill.createdAt.toDate === 'function' ? bill.createdAt.toDate().toLocaleDateString() : 'Unknown Date'}
+                        {bill.createdAt && typeof bill.createdAt === 'object' && 'toDate' in bill.createdAt && typeof bill.createdAt.toDate === 'function' ? bill.createdAt.toDate().toLocaleDateString() : (typeof bill.createdAt === 'string' ? bill.createdAt : 'Unknown Date')}
                       </span>
                     </div>
                     <ul className="mb-4 space-y-2">

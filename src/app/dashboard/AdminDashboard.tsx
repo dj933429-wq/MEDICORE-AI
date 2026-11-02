@@ -9,7 +9,7 @@ interface User {
   name: string;
   email: string;
   role: string;
-  [key: string]: any;
+  [key: string]: unknown;
 }
 
 export default function AdminDashboard() {

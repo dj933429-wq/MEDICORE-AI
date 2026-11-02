@@ -2,37 +2,211 @@ rules_version = '2';
 
 service cloud.firestore {
   match /databases/{database}/documents {
+
+    // =========================================================================
+    // Authentication & Role Helper Functions (Claims-Only Trusted Authorization)
+    // =========================================================================
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    // Trusted Authorization via Firebase Auth Custom Claims
+    function hasRole(roleName) {
+      return isAuthenticated() && request.auth.token.role == roleName;
+    }
+
+    function isAdmin() {
+      return hasRole('admin');
+    }
+
+    function isDoctor() {
+      return hasRole('doctor');
+    }
+
+    function isPharmacist() {
+      return hasRole('pharmacist');
+    }
+
+    function isBloodBank() {
+      return hasRole('blood_bank');
+    }
+
+    function isAssignedDoctor(patientId) {
+      return isDoctor() && 
+        exists(/databases/$(database)/documents/patients/$(patientId)) &&
+        get(/databases/$(database)/documents/patients/$(patientId)).data.doctorId == request.auth.uid;
+    }
+
+    function isPatientOwner(patientId) {
+      return isOwner(patientId) || 
+        (isAuthenticated() && exists(/databases/$(database)/documents/patients/$(patientId)) &&
+         get(/databases/$(database)/documents/patients/$(patientId)).data.userId == request.auth.uid);
+    }
+
+    // =========================================================================
+    // 1. Users Directory: Private Profile Isolation (Owner & Admin Only)
+    // =========================================================================
     match /users/{userId} {
-      allow read: if request.auth != null && (resource.data.role == "doctor" || resource.data.role == "patient" || resource.data.role == "pharmacist");
-      allow write: if request.auth != null && request.auth.uid == userId;
+      // User profiles are strictly private: owner and admin only.
+      // Assigned doctors can view their assigned patient's core user document if linked.
+      allow read: if isOwner(userId) || 
+        isAdmin() || 
+        (isDoctor() && resource.data.doctorId == request.auth.uid);
+
+      // On signup, clients can ONLY create role == 'patient'. Privileged roles require Admin Custom Claims.
+      allow create: if isOwner(userId) && 
+        (!('role' in request.resource.data) || request.resource.data.role == 'patient' || isAdmin());
+
+      // On profile update, 'role' is strictly IMMUTABLE from the client to prevent role escalation.
+      allow update: if (isOwner(userId) && (!('role' in request.resource.data.diff(resource.data).affectedKeys()) || isAdmin())) ||
+        (isDoctor() && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['doctorId']));
+
+      allow delete: if isAdmin();
     }
+
+    // =========================================================================
+    // 2. Public Doctor Lookup Directory (Minimal Non-Sensitive Projection)
+    // =========================================================================
+    match /publicDoctorProfiles/{doctorId} {
+      // Authenticated users can view public doctor profiles for appointment scheduling
+      allow read: if isAuthenticated();
+
+      // Only the verified doctor owner or admin can create or modify public doctor profiles
+      // Strictly enforce approved non-sensitive fields
+      allow create, update: if ((isDoctor() && isOwner(doctorId) &&
+        request.resource.data.keys().hasOnly(['name', 'specialization', 'profileImage', 'availability', 'doctorId']) &&
+        (!('doctorId' in request.resource.data) || request.resource.data.doctorId == request.auth.uid)) || isAdmin());
+
+      allow delete: if isAdmin();
+    }
+
+    // =========================================================================
+    // 3. Pharmacy Patient Lookup Directory (Minimal Non-Sensitive Projection)
+    // =========================================================================
+    match /pharmacyPatientLookup/{patientId} {
+      // Only authorized pharmacists and administrators can read the billing lookup directory
+      allow read: if isPharmacist() || isAdmin();
+
+      // Patients can only create or update their own lookup record with strictly permitted minimal fields
+      allow create: if ((isOwner(patientId) && 
+        request.resource.data.keys().hasOnly(['displayName', 'patientReference', 'createdAt']) &&
+        request.resource.data.patientReference == request.auth.uid) || isAdmin());
+
+      allow update: if ((isOwner(patientId) && 
+        request.resource.data.keys().hasOnly(['displayName', 'patientReference', 'createdAt']) &&
+        request.resource.data.patientReference == resource.data.patientReference &&
+        request.resource.data.patientReference == request.auth.uid) || isAdmin());
+
+      allow delete: if isAdmin();
+    }
+
+    // =========================================================================
+    // 4. Patients & Medical History: Doctor Assignment & Clinical Immutability
+    // =========================================================================
     match /patients/{patientId} {
-      // Patients collection requires user authorization mapping to the creator or assigned doctor, or pharmacist
-      allow read: if request.auth != null && (resource.data.userId == request.auth.uid || resource.data.doctorId == request.auth.uid || get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == "pharmacist");
-      allow update, delete: if request.auth != null && (resource.data.userId == request.auth.uid || resource.data.doctorId == request.auth.uid);
-      allow create: if request.auth != null && (request.resource.data.userId == request.auth.uid || request.resource.data.doctorId == request.auth.uid);
-      
+      // Patient owner, assigned doctor, and admin can read the patient profile.
+      // Pharmacists are strictly FORBIDDEN from browsing patient profiles.
+      allow read: if isPatientOwner(patientId) || 
+        isAssignedDoctor(patientId) || 
+        isAdmin();
+
+      // On creation, patient can only create their own profile bound to auth.uid
+      allow create: if isAuthenticated() && 
+        (request.resource.data.userId == request.auth.uid || isOwner(patientId) || isAdmin());
+
+      // On update, patient cannot change userId or doctorId; assigned doctor can link doctorId
+      allow update: if (isPatientOwner(patientId) && 
+          request.resource.data.userId == resource.data.userId &&
+          (!('doctorId' in request.resource.data) || request.resource.data.doctorId == resource.data.doctorId)) ||
+        (isDoctor() && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['doctorId'])) ||
+        isAdmin();
+
+      allow delete: if isAdmin();
+
+      // Clinical Medical Records: Patient can read; ONLY assigned doctor can append; history is immutable
       match /medicalRecords/{recordId} {
-      	// Must inherit the parent patient's userId or doctorId check tightly
-        allow read, write: if request.auth != null && (get(/databases/$(database)/documents/patients/$(patientId)).data.userId == request.auth.uid || get(/databases/$(database)/documents/patients/$(patientId)).data.doctorId == request.auth.uid);
+        allow read: if isPatientOwner(patientId) || isAssignedDoctor(patientId) || isAdmin();
+        allow create: if isAssignedDoctor(patientId) && request.resource.data.doctorId == request.auth.uid;
+        allow update, delete: if isAdmin();
       }
-      
+
+      // Patient Bills subcollection
       match /bills/{billId} {
-        allow read, write: if request.auth != null && (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == "pharmacist" || get(/databases/$(database)/documents/patients/$(patientId)).data.userId == request.auth.uid || get(/databases/$(database)/documents/patients/$(patientId)).data.doctorId == request.auth.uid);
+        allow read: if isPatientOwner(patientId) || 
+          (isPharmacist() && resource.data.pharmacistId == request.auth.uid) || 
+          isAdmin();
+        allow create: if isPharmacist() && request.resource.data.pharmacistId == request.auth.uid;
+        allow update, delete: if isAdmin();
       }
     }
-    
+
+    // =========================================================================
+    // 5. Central Invoices / Bills: Scoped to Patient & Issuing Pharmacist
+    // =========================================================================
     match /bills/{billId} {
-      allow read, write: if request.auth != null;
+      allow read: if isAuthenticated() && 
+        (resource.data.patientId == request.auth.uid || 
+         resource.data.pharmacistId == request.auth.uid || 
+         isAdmin());
+
+      allow create: if isPharmacist() && request.resource.data.pharmacistId == request.auth.uid;
+      allow update, delete: if isAdmin();
     }
-    
+
+    // =========================================================================
+    // 6. Appointments: Explicit Scoping (Patients & Assigned Doctors Only)
+    // =========================================================================
     match /appointments/{appointmentId} {
-      allow create: if request.auth != null && request.resource.data.patientId == request.auth.uid;
-      allow read, update: if request.auth != null && (resource.data.patientId == request.auth.uid || resource.data.doctorId == request.auth.uid);
+      // Individual appointment read: patient owner, assigned doctor, or admin
+      allow get: if isAuthenticated() && 
+        (resource.data.patientId == request.auth.uid || 
+         (isDoctor() && resource.data.doctorId == request.auth.uid) || 
+         isAdmin());
+
+      // List queries: must be filtered by patientId == auth.uid (patient) or doctorId == auth.uid (doctor)
+      allow list: if isAuthenticated() && (
+        (resource.data.patientId == request.auth.uid) ||
+        (isDoctor() && resource.data.doctorId == request.auth.uid) ||
+        isAdmin()
+      );
+
+      // Patients can create appointments for themselves in 'pending' status
+      allow create: if isAuthenticated() && 
+        request.resource.data.patientId == request.auth.uid &&
+        request.resource.data.status == 'pending' &&
+        (!('recordAdded' in request.resource.data) || request.resource.data.recordAdded == false);
+
+      // Updates are field-restricted:
+      // - Patient can only update notes or cancel (cannot change doctor, time, patientId, or complete)
+      // - Assigned doctor can update status ('scheduled', 'completed', 'cancelled') and recordAdded
+      allow update: if isAuthenticated() && (
+        (resource.data.patientId == request.auth.uid && 
+         request.resource.data.patientId == resource.data.patientId &&
+         request.resource.data.doctorId == resource.data.doctorId &&
+         request.resource.data.date == resource.data.date &&
+         request.resource.data.time == resource.data.time &&
+         (request.resource.data.status == resource.data.status || request.resource.data.status == 'cancelled')) ||
+        (isDoctor() && resource.data.doctorId == request.auth.uid && 
+         request.resource.data.patientId == resource.data.patientId &&
+         request.resource.data.doctorId == resource.data.doctorId &&
+         request.resource.data.date == resource.data.date &&
+         request.resource.data.time == resource.data.time &&
+         (request.resource.data.status in ['scheduled', 'completed', 'cancelled'])) ||
+        isAdmin()
+      );
+
+      allow delete: if isAdmin();
     }
-    
+
+    // =========================================================================
+    // 7. Pharmacy Inventory: Strictly Isolated to Owning Pharmacist
+    // =========================================================================
     match /inventory/{userId}/medicines/{medicineId} {
-      allow read, write: if request.auth != null && request.auth.uid == userId;
+      allow read, write: if isOwner(userId) && isPharmacist();
     }
   }
 }
