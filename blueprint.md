@@ -82,7 +82,7 @@ Medicore-AI is an AI-powered healthcare management platform built on Next.js 16 
 - **Authentication Configured:** Enabled Email/Password provider on live project using Firebase MCP and CLI deployment.
 - **Cloud Firestore Native Provisioned:** Created Native Mode database `(default)` in owner-approved region `asia-south1` (Mumbai, India).
 - **Hardened Rules Deployed:** Deployed `firestore.rules` and indexes (`firestore.indexes.json`) directly to live project `medicore-ai-exhibition`. Unused composite index removed.
-- **Custom Claims Architecture:** Verified trusted claims workflow using Firebase MCP `auth_update_user`. Administrator provisioning ready pending owner target UID submission.
+- **Custom Claims Architecture & Initial Admin Provisioning:** Verified trusted claims workflow using Firebase MCP `auth_update_user`. Initial permanent administrator provisioned for `dj933429@gmail.com` (UID: `ugImegYwx0aL317wYJLXUbhkWGP2`) with verified claim `{"role": "admin"}`.
 - **Verification & Certification:** 45/45 tests passing on Firestore emulator, 0 ESLint errors, 0 TypeScript errors, clean Next.js 16 production build.
 
 ### Completed: Phase 2.1 — Live Firebase Integration Verification
