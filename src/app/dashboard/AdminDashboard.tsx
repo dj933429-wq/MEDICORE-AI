@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { useAuth } from '@/lib/auth';
+import { auth } from '@/lib/firebase';
 
 interface AdminUser {
   uid: string;
@@ -44,7 +45,14 @@ export default function AdminDashboard() {
     setError(null);
 
     try {
-      const token = await currentUser.getIdToken();
+      const token = auth.currentUser 
+        ? await auth.currentUser.getIdToken() 
+        : (currentUser && typeof currentUser.getIdToken === 'function' ? await currentUser.getIdToken() : null);
+
+      if (!token) {
+        throw new Error('Authentication token not available. Please re-authenticate.');
+      }
+
       const res = await fetch('/api/admin/users', {
         headers: {
           Authorization: `Bearer ${token}`
@@ -123,7 +131,14 @@ export default function AdminDashboard() {
     setSuccessNotice(null);
 
     try {
-      const token = await currentUser.getIdToken();
+      const token = auth.currentUser 
+        ? await auth.currentUser.getIdToken() 
+        : (currentUser && typeof currentUser.getIdToken === 'function' ? await currentUser.getIdToken() : null);
+
+      if (!token) {
+        throw new Error('Authentication token not available. Please re-authenticate.');
+      }
+
       const res = await fetch('/api/admin/users', {
         method: 'PATCH',
         headers: {

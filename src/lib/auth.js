@@ -43,7 +43,9 @@ export const AuthProvider = ({ children }) => {
               // Effective role for routing and authorization: strictly Custom Claims for privileged roles
               role: effectiveRole,
               customRole: customRole || null,
-              profileRole: userData.role || 'patient'
+              profileRole: userData.role || 'patient',
+              getIdToken: (forceRefresh) => firebaseUser.getIdToken(forceRefresh),
+              getIdTokenResult: (forceRefresh) => firebaseUser.getIdTokenResult(forceRefresh)
             });
           } else {
             console.warn("User document not found in Firestore. Creating default profile...");
@@ -65,7 +67,9 @@ export const AuthProvider = ({ children }) => {
               ...userData, 
               role: effectiveRole,
               customRole: customRole || null,
-              profileRole: 'patient'
+              profileRole: 'patient',
+              getIdToken: (forceRefresh) => firebaseUser.getIdToken(forceRefresh),
+              getIdTokenResult: (forceRefresh) => firebaseUser.getIdTokenResult(forceRefresh)
             });
           }
 
@@ -119,7 +123,12 @@ export const AuthProvider = ({ children }) => {
 
         } catch (error) {
           console.error("Error fetching user profile details:", error);
-          setUser({ ...firebaseUser, role: 'patient' }); 
+          setUser({ 
+            ...firebaseUser, 
+            role: 'patient',
+            getIdToken: (forceRefresh) => firebaseUser.getIdToken(forceRefresh),
+            getIdTokenResult: (forceRefresh) => firebaseUser.getIdTokenResult(forceRefresh)
+          }); 
         } finally {
           setLoading(false);
         }
