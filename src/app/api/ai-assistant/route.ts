@@ -1,5 +1,10 @@
 import { medicalDatabase } from "@/lib/medicalData";
 
+interface GeminiModel {
+  name: string;
+  supportedGenerationMethods?: string[];
+}
+
 const RATE_LIMIT = 15;
 const WINDOW = 60 * 1000; // 1 minute
 
@@ -68,12 +73,13 @@ export async function POST(req: Request) {
     
     let targetModel = "gemini-pro"; 
 
-    if (modelsData && modelsData.models) {
+    if (modelsData && Array.isArray(modelsData.models)) {
       const supported = modelsData.models
-        .filter((m: any) => m.supportedGenerationMethods?.includes("generateContent"))
-        .map((m: any) => m.name.replace('models/', ''));
+        .filter((m: GeminiModel) => m.supportedGenerationMethods?.includes("generateContent"))
+        .map((m: GeminiModel) => m.name.replace('models/', ''));
 
-      if (supported.includes("gemini-1.5-flash")) targetModel = "gemini-1.5-flash";
+      if (supported.includes("gemini-2.0-flash")) targetModel = "gemini-2.0-flash";
+      else if (supported.includes("gemini-1.5-flash")) targetModel = "gemini-1.5-flash";
       else if (supported.includes("gemini-1.5-pro")) targetModel = "gemini-1.5-pro";
       else if (supported.includes("gemini-1.0-pro")) targetModel = "gemini-1.0-pro";
       else if (supported.includes("gemini-pro")) targetModel = "gemini-pro";

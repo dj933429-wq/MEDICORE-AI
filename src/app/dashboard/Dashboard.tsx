@@ -1,12 +1,21 @@
 'use client';
 
-import { useAuth } from '../../lib/auth'; // We will create this hook
+import { useEffect } from 'react';
+import { useRouter } from 'next/navigation';
+import { useAuth } from '../../lib/auth';
 import AdminDashboard from './AdminDashboard';
 import DoctorDashboard from './DoctorDashboard';
 import PatientDashboard from './PatientDashboard';
 
 export default function Dashboard() {
   const { user, loading } = useAuth();
+  const router = useRouter();
+
+  useEffect(() => {
+    if (user?.role === 'pharmacist') {
+      router.replace('/dashboard/pharmacist');
+    }
+  }, [user, router]);
 
   if (loading) {
     return (
@@ -42,8 +51,12 @@ export default function Dashboard() {
     case 'patient':
       return <PatientDashboard />;
     case 'pharmacist':
-      window.location.href = '/dashboard/pharmacist';
-      return null;
+      return (
+        <div className="min-h-screen flex flex-col items-center justify-center bg-slate-50">
+          <div className="w-12 h-12 border-4 border-blue-200 border-t-blue-600 rounded-full animate-spin mb-4"></div>
+          <p className="text-slate-500 font-medium">Redirecting to Pharmacist Dashboard...</p>
+        </div>
+      );
     default:
       return <div>Unknown role.</div>;
   }

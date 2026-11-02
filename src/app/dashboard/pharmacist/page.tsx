@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation';
 import Tesseract from "tesseract.js";
 import { useAuth } from '../../../lib/auth';
 import { db } from '../../../lib/firebase';
-import { collection, addDoc, getDocs, query, orderBy, where, serverTimestamp, updateDoc, deleteDoc, doc } from 'firebase/firestore';
+import { collection, addDoc, getDocs, query, orderBy, serverTimestamp, updateDoc, deleteDoc, doc } from 'firebase/firestore';
 
 interface Medicine {
   id: string;
@@ -17,9 +17,11 @@ interface Medicine {
 
 interface Patient {
   id: string;
+  name?: string;
+  displayName?: string;
+  patientReference?: string;
   firstName?: string;
   lastName?: string;
-  name?: string;
   email?: string;
 }
 
@@ -108,27 +110,22 @@ export default function PharmacistDashboard() {
 
   const fetchPatients = async () => {
     try {
-      const q = query(collection(db, 'users'), where('role', '==', 'patient'));
-      const qs = await getDocs(q);
+      // Query minimal pharmacy patient lookup directory
+      const qs = await getDocs(collection(db, 'pharmacyPatientLookup'));
       const pts: Patient[] = [];
-      qs.forEach(doc => {
-        pts.push({ id: doc.id, ...doc.data() } as Patient);
+      qs.forEach(docSnap => {
+        const data = docSnap.data();
+        pts.push({
+          id: docSnap.id,
+          name: data.displayName || 'Unknown Patient',
+          displayName: data.displayName,
+          patientReference: data.patientReference || docSnap.id
+        });
       });
-      console.log("Fetched patients:", pts);
+      console.log("Fetched patients from pharmacy lookup:", pts);
       setPatients(pts);
     } catch (err) {
-      console.error("Failed to fetch patients from users collection", err);
-      // Fallback
-      try {
-        const fbQ = query(collection(db, 'patients'), where('role', '==', 'patient'));
-        const fbSnap = await getDocs(fbQ);
-        const fbPts: Patient[] = [];
-        fbSnap.forEach(doc => fbPts.push({ id: doc.id, ...doc.data() } as Patient));
-        console.log("Fetched patients (fallback):", fbPts);
-        setPatients(fbPts);
-      } catch (e) {
-        console.error("Fallback patient fetch failed", e);
-      }
+      console.error("Failed to fetch patients from pharmacyPatientLookup collection", err);
     }
   };
 
@@ -157,7 +154,7 @@ export default function PharmacistDashboard() {
           fallbackMeds.push({ id: doc.id, ...doc.data() } as Medicine);
         });
         // Sort manually
-        fallbackMeds.sort((a: any, b: any) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
+        fallbackMeds.sort((a, b) => (((b as unknown as { createdAt?: { seconds?: number } }).createdAt?.seconds || 0) - ((a as unknown as { createdAt?: { seconds?: number } }).createdAt?.seconds || 0)));
         setMedicines(fallbackMeds);
       } catch (innerErr) {
         console.error('Fallback query failed', innerErr);
@@ -330,8 +327,8 @@ export default function PharmacistDashboard() {
       
       // Clear message after 3 seconds
       setTimeout(() => setSuccessMessage(''), 3000);
-    } catch (err: any) {
-      setError(err.message || 'Failed to add medicine.');
+    } catch (err: unknown) {
+      setError((err as Error).message || 'Failed to add medicine.');
       console.error(err);
     } finally {
       setIsSubmitting(false);
@@ -349,7 +346,7 @@ export default function PharmacistDashboard() {
         {
           tessedit_char_whitelist:
             "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
-        } as any
+        } as unknown as Partial<Tesseract.WorkerOptions>
       );
 
       console.log("OCR TEXT:", text);
@@ -357,7 +354,7 @@ export default function PharmacistDashboard() {
       // =====================
       // TEXT CLEANING
       // =====================
-      let cleanText = text
+      const cleanText = text
         .replace(/\n/g, " ")
         .replace(/\s+/g, " ")
         .toLowerCase();
@@ -377,7 +374,7 @@ export default function PharmacistDashboard() {
 
       let name = "";
 
-      for (let med of knownMedicines) {
+      for (const med of knownMedicines) {
         if (cleanText.includes(med)) {
           name = med.toUpperCase();
           break;

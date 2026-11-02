@@ -6,13 +6,23 @@ import { useAuth } from '../../lib/auth';
 import { db } from '../../lib/firebase';
 import { collection, query, getDocs, where, doc, getDoc, updateDoc, addDoc, serverTimestamp, orderBy } from 'firebase/firestore';
 
+interface MedicalRecordEntry {
+  id?: string;
+  diagnosis?: string;
+  medicines?: string;
+  notes?: string;
+  doctorId?: string;
+  createdAt?: { toDate?: () => Date; seconds?: number } | string;
+  [key: string]: unknown;
+}
+
 interface Patient {
   id: string;
   name?: string;
   email?: string;
   role?: string;
   doctorId?: string;
-  records?: any[];
+  records?: MedicalRecordEntry[];
 }
 
 interface Appointment {
@@ -78,8 +88,8 @@ export default function DoctorDashboard() {
              if (docSnap.exists()) {
                  const pData = { ...docSnap.data(), id: docSnap.id } as Patient;
                  const rSnap = await getDocs(query(collection(db, `patients/${pId}/medicalRecords`), orderBy('createdAt', 'desc')));
-                 const recs: any[] = [];
-                 rSnap.forEach(r => recs.push({ ...r.data(), id: r.id }));
+                 const recs: MedicalRecordEntry[] = [];
+                 rSnap.forEach(r => recs.push({ ...r.data(), id: r.id } as MedicalRecordEntry));
                  pData.records = recs;
                  fetchedPatients.push(pData);
              }
@@ -316,7 +326,7 @@ export default function DoctorDashboard() {
                     {patient.records && patient.records.length > 0 ? (
                       <div className="text-sm text-gray-700 space-y-2 mb-4">
                         <div className="font-semibold text-gray-900 border-l-2 border-blue-500 pl-2 mb-3">
-                          Latest Visit: {patient.records[0].createdAt ? (patient.records[0].createdAt.toDate ? patient.records[0].createdAt.toDate().toLocaleDateString() : new Date().toLocaleDateString()) : 'N/A'}
+                          Latest Visit: {patient.records[0].createdAt ? (typeof patient.records[0].createdAt === 'object' && patient.records[0].createdAt && 'toDate' in patient.records[0].createdAt && typeof patient.records[0].createdAt.toDate === 'function' ? patient.records[0].createdAt.toDate().toLocaleDateString() : (typeof patient.records[0].createdAt === 'string' ? patient.records[0].createdAt : new Date().toLocaleDateString())) : 'N/A'}
                         </div>
                         <p><span className="font-medium text-blue-900">Diagnosis:</span><br/> {patient.records[0].diagnosis}</p>
                         <p><span className="font-medium text-blue-900">Medicines:</span><br/> {patient.records[0].medicines}</p>

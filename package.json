@@ -4,9 +4,10 @@
   "private": true,
   "scripts": {
     "dev": "next dev --webpack",
-    "build": "next build",
+    "build": "next build --webpack",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "test:security": "npx -y firebase-tools emulators:exec --only firestore \"node tests/firestore-security.test.mjs\""
   },
   "dependencies": {
     "@google/generative-ai": "^0.24.1",
@@ -14,9 +15,11 @@
     "next": "16.2.0",
     "react": "19.2.4",
     "react-dom": "19.2.4",
+    "sharp": "^0.33.5",
     "tesseract.js": "^7.0.0"
   },
   "devDependencies": {
+    "@firebase/rules-unit-testing": "^5.0.2",
     "@tailwindcss/postcss": "^4",
     "@types/node": "^20",
     "@types/react": "^19",
