@@ -35,6 +35,15 @@ export default function AdminDashboard() {
     newRole: '',
   });
 
+  // Decline Request Modal state
+  const [declineModal, setDeclineModal] = useState<{
+    isOpen: boolean;
+    targetUser: AdminUser | null;
+  }>({
+    isOpen: false,
+    targetUser: null,
+  });
+
   const [updatingUid, setUpdatingUid] = useState<string | null>(null);
   const [successNotice, setSuccessNotice] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -117,6 +126,70 @@ export default function AdminDashboard() {
       targetUser,
       newRole: targetUser.requestedRole
     });
+  };
+
+  const openDeclineConfirmation = (targetUser: AdminUser) => {
+    setDeclineModal({
+      isOpen: true,
+      targetUser
+    });
+  };
+
+  const applyDeclineRequest = async () => {
+    if (!declineModal.targetUser || !currentUser) return;
+
+    const targetUser = declineModal.targetUser;
+    setUpdatingUid(targetUser.uid);
+    setDeclineModal({ isOpen: false, targetUser: null });
+    setActionError(null);
+
+    try {
+      const token = auth.currentUser 
+        ? await auth.currentUser.getIdToken() 
+        : (currentUser && typeof currentUser.getIdToken === 'function' ? await currentUser.getIdToken() : null);
+
+      if (!token) {
+        throw new Error('Authentication token not available. Please re-authenticate.');
+      }
+
+      const res = await fetch('/api/admin/users', {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          targetUid: targetUser.uid,
+          action: 'decline_request'
+        })
+      });
+
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data.error || `HTTP error ${res.status}`);
+      }
+
+      // Update user in local state: clear requestedRole
+      setUsers(prev => prev.map(u => {
+        if (u.uid === targetUser.uid) {
+          return {
+            ...u,
+            requestedRole: null
+          };
+        }
+        return u;
+      }));
+
+      setSuccessNotice(`Role request for ${targetUser.name} (${targetUser.requestedRole}) has been declined.`);
+      setTimeout(() => setSuccessNotice(null), 5000);
+
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error('Failed to decline role request:', message);
+      setActionError(message);
+    } finally {
+      setUpdatingUid(null);
+    }
   };
 
   const applyRoleChange = async () => {
@@ -441,9 +514,16 @@ export default function AdminDashboard() {
                               <button
                                 onClick={() => handleQuickApproveRequest(u)}
                                 disabled={isUpdating}
-                                className="text-xs bg-purple-600 hover:bg-purple-700 text-white font-medium px-2.5 py-1 rounded-lg transition-colors"
+                                className="text-xs bg-purple-600 hover:bg-purple-700 text-white font-medium px-2.5 py-1 rounded-lg transition-colors shadow-sm"
                               >
                                 Approve
+                              </button>
+                              <button
+                                onClick={() => openDeclineConfirmation(u)}
+                                disabled={isUpdating}
+                                className="text-xs bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 font-medium px-2.5 py-1 rounded-lg transition-colors"
+                              >
+                                Decline
                               </button>
                             </div>
                           ) : (
@@ -506,6 +586,56 @@ export default function AdminDashboard() {
           )}
         </div>
       </div>
+
+      {/* Decline Request Modal */}
+      {declineModal.isOpen && declineModal.targetUser && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm animate-fade-in">
+          <div className="bg-white rounded-3xl p-6 sm:p-8 max-w-md w-full shadow-2xl border border-slate-100">
+            <div className="w-12 h-12 rounded-full bg-rose-50 text-rose-600 flex items-center justify-center mb-5">
+              <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </div>
+
+            <h3 className="text-xl font-bold text-slate-800 mb-2">Decline Role Request</h3>
+            <p className="text-sm text-slate-600 mb-4 leading-relaxed">
+              Are you sure you want to decline the role request from{' '}
+              <strong className="text-slate-800">{declineModal.targetUser.name}</strong> ({declineModal.targetUser.email})?
+            </p>
+
+            <div className="bg-slate-50 p-4 rounded-2xl mb-6 border border-slate-100 text-xs space-y-2">
+              <div className="flex justify-between">
+                <span className="text-slate-500">Current Role:</span>
+                <span className="font-semibold text-slate-700 capitalize">{declineModal.targetUser.role}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-500">Requested Role:</span>
+                <span className="font-bold text-rose-600 uppercase">{declineModal.targetUser.requestedRole}</span>
+              </div>
+              <p className="text-[11px] text-slate-400 border-t border-slate-200/60 pt-2 mt-2 leading-normal">
+                Declining this request will dismiss the application. The user will remain as a <strong>{declineModal.targetUser.role}</strong> and will not receive any privileged Custom Claims.
+              </p>
+            </div>
+
+            <div className="flex items-center justify-end gap-3">
+              <button
+                type="button"
+                onClick={() => setDeclineModal({ isOpen: false, targetUser: null })}
+                className="px-4 py-2.5 text-sm font-semibold text-slate-600 hover:bg-slate-100 rounded-xl transition-colors"
+              >
+                Keep Request
+              </button>
+              <button
+                type="button"
+                onClick={applyDeclineRequest}
+                className="px-5 py-2.5 text-sm font-semibold text-white bg-rose-600 hover:bg-rose-700 rounded-xl shadow-sm transition-all hover:shadow-[0_0_15px_rgba(225,29,72,0.3)]"
+              >
+                Decline Request
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Confirmation Modal */}
       {confirmModal.isOpen && confirmModal.targetUser && (

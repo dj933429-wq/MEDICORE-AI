@@ -122,15 +122,11 @@ export async function PATCH(req: Request) {
 
   try {
     const body = await req.json().catch(() => ({}));
-    const { targetUid, newRole } = body;
+    const { targetUid, newRole, action } = body;
 
     // 1. Validate inputs
     if (!targetUid || typeof targetUid !== 'string') {
       return NextResponse.json({ error: 'Validation error: targetUid is required' }, { status: 400 });
-    }
-
-    if (!newRole || typeof newRole !== 'string') {
-      return NextResponse.json({ error: 'Validation error: newRole is required' }, { status: 400 });
     }
 
     // 2. Disallow self-modification
@@ -138,14 +134,7 @@ export async function PATCH(req: Request) {
       return NextResponse.json({ error: 'Security constraint: Administrators cannot modify their own role' }, { status: 400 });
     }
 
-    // 3. Validate role against strict allowlist (disallow admin and blood_bank)
-    if (!ALLOWED_ADMIN_ROLES.includes(newRole as AllowedRole)) {
-      return NextResponse.json({ 
-        error: `Invalid role '${newRole}'. Permitted roles through this interface are: ${ALLOWED_ADMIN_ROLES.join(', ')}` 
-      }, { status: 400 });
-    }
-
-    // 4. Verify target user exists in Firebase Authentication
+    // 3. Verify target user exists in Firebase Authentication
     let targetAuthUser;
     try {
       targetAuthUser = await adminAuth.getUser(targetUid);
@@ -154,7 +143,53 @@ export async function PATCH(req: Request) {
       return NextResponse.json({ error: `User with UID '${targetUid}' not found in Authentication system` }, { status: 404 });
     }
 
-    // 5. Retrieve existing custom claims and preserve unrelated claims
+    // 4. Handle declining a pending role request
+    if (action === 'decline_request' || action === 'decline') {
+      const userDocRef = adminDb.collection('users').doc(targetUid);
+      const userSnap = await userDocRef.get();
+      const existingFsData = userSnap.data() || {};
+      const declinedRole = (existingFsData.requestedRole as string) || 'requested role';
+
+      await userDocRef.set({
+        requestedRole: FieldValue.delete(),
+        updatedAt: new Date().toISOString()
+      }, { merge: true });
+
+      // Record administrative audit log
+      try {
+        await adminDb.collection('adminAuditLogs').add({
+          actorUid: callerUid,
+          actorEmail: authCheck.decodedToken.email || 'unknown',
+          targetUid,
+          targetEmail: targetAuthUser.email || '',
+          action: 'decline_request',
+          declinedRole,
+          timestamp: new Date().toISOString()
+        });
+      } catch (auditErr) {
+        console.warn('[AdminUsersAPI] Warning: Audit log write failed:', auditErr);
+      }
+
+      return NextResponse.json({
+        success: true,
+        message: `Role request for '${declinedRole}' has been declined.`,
+        targetUid,
+        declinedRole
+      }, { status: 200 });
+    }
+
+    if (!newRole || typeof newRole !== 'string') {
+      return NextResponse.json({ error: 'Validation error: newRole is required' }, { status: 400 });
+    }
+
+    // 5. Validate role against strict allowlist (disallow admin and blood_bank)
+    if (!ALLOWED_ADMIN_ROLES.includes(newRole as AllowedRole)) {
+      return NextResponse.json({ 
+        error: `Invalid role '${newRole}'. Permitted roles through this interface are: ${ALLOWED_ADMIN_ROLES.join(', ')}` 
+      }, { status: 400 });
+    }
+
+    // 6. Retrieve existing custom claims and preserve unrelated claims
     const existingClaims = targetAuthUser.customClaims || {};
     const oldRole = (existingClaims.role as string) || 'patient';
 

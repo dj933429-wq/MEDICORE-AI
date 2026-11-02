@@ -99,10 +99,11 @@ Medicore-AI is an AI-powered healthcare management platform built on Next.js 16 
 - **Secure Admin API Route (`src/app/api/admin/users/route.ts`):**
   - `GET`: Authenticates admin ID tokens, verifies `decodedToken.role === 'admin'`, and retrieves all users with their authoritative Custom Claims merged with profile metadata.
   - `PATCH`: Validates admin authorization, enforces role allowlist (`patient`, `doctor`, `pharmacist`), disallows admin self-modification and escalation to `admin`, updates Firebase Auth Custom Claims, synchronizes the Firestore `users/{uid}` role projection, auto-clears approved `requestedRole` requests, and writes administrative audit records to `adminAuditLogs`.
-- **Interactive Admin Dashboard (`src/app/dashboard/AdminDashboard.tsx`):** Built responsive UI with live user directory, search filter, role selector dropdowns, pending role request approval badges, confirmation modals, loading spinners, and role change notices. The current admin's own account is protected from self-demotion.
+- **Interactive Admin Dashboard (`src/app/dashboard/AdminDashboard.tsx`):** Built responsive UI with live user directory, search filter, role selector dropdowns, pending role request approval badges, dedicated **Approve** and **Decline** request actions, confirmation modals, loading spinners, and role change notices. The current admin's own account is protected from self-demotion.
+- **Decline Role Request Workflow:** Administrators can decline pending role applications (e.g., patient asking to be doctor). The server (`/api/admin/users`) clears `requestedRole` in Firestore without granting privileged Custom Claims, preserves the user's current role, and records an administrative audit event in `adminAuditLogs`.
 - **Live Admin SDK Runtime Verification:** Successfully configured `FIREBASE_SERVICE_ACCOUNT_KEY` in local `.env.local` for `medicore-ai-exhibition`. Verified live connection against Firebase Authentication (`adminAuth.listUsers`) and Cloud Firestore (`adminDb.collection('users')`).
-- **Automated Test Suite (`tests/admin-roles.test.mjs`):** Implemented 12 comprehensive unit test assertions verifying authentication barriers, role transitions, claim preservation, and Firestore projections with 12/12 passing.
-- **Verification & Build:** 12/12 admin tests passing, 45/45 emulator tests passing, 0 ESLint errors, 0 TypeScript errors, clean Next.js 16 production compilation across all 10 routes.
+- **Automated Test Suite (`tests/admin-roles.test.mjs`):** Implemented 13 comprehensive unit test assertions verifying authentication barriers, role transitions, claim preservation, Firestore projections, and request decline workflows with 13/13 passing.
+- **Verification & Build:** 13/13 admin tests passing, 45/45 emulator tests passing, 0 ESLint errors, 0 TypeScript errors, clean Next.js 16 production compilation across all 10 routes.
 
 ---
 

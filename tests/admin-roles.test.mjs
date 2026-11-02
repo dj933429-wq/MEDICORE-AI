@@ -106,24 +106,50 @@ class MockFirebaseState {
       return { status: 403, body: { error: 'Forbidden: Administrator privileges required' } };
     }
 
-    const { targetUid, newRole } = payload || {};
+    const { targetUid, newRole, action } = payload || {};
 
     if (!targetUid || typeof targetUid !== 'string') {
       return { status: 400, body: { error: 'Validation error: targetUid is required' } };
     }
-    if (!newRole || typeof newRole !== 'string') {
-      return { status: 400, body: { error: 'Validation error: newRole is required' } };
-    }
     if (targetUid === caller.uid) {
       return { status: 400, body: { error: 'Security constraint: Administrators cannot modify their own role' } };
-    }
-    if (!ALLOWED_ADMIN_ROLES.includes(newRole)) {
-      return { status: 400, body: { error: `Invalid role '${newRole}'. Permitted roles are: ${ALLOWED_ADMIN_ROLES.join(', ')}` } };
     }
 
     const targetUser = this.authUsers.get(targetUid);
     if (!targetUser) {
       return { status: 404, body: { error: `User with UID '${targetUid}' not found in Authentication system` } };
+    }
+
+    if (action === 'decline_request' || action === 'decline') {
+      const fsData = this.firestoreUsers.get(targetUid) || {};
+      const declinedRole = fsData.requestedRole || 'requested role';
+      delete fsData.requestedRole;
+      this.firestoreUsers.set(targetUid, fsData);
+
+      this.auditLogs.push({
+        actorUid: caller.uid,
+        targetUid,
+        action: 'decline_request',
+        declinedRole,
+        timestamp: new Date().toISOString()
+      });
+
+      return {
+        status: 200,
+        body: {
+          success: true,
+          message: `Role request for '${declinedRole}' has been declined.`,
+          targetUid,
+          declinedRole
+        }
+      };
+    }
+
+    if (!newRole || typeof newRole !== 'string') {
+      return { status: 400, body: { error: 'Validation error: newRole is required' } };
+    }
+    if (!ALLOWED_ADMIN_ROLES.includes(newRole)) {
+      return { status: 400, body: { error: `Invalid role '${newRole}'. Permitted roles are: ${ALLOWED_ADMIN_ROLES.join(', ')}` } };
     }
 
     const existingClaims = targetUser.customClaims || {};
@@ -312,6 +338,29 @@ async function run() {
     assert.strictEqual(mock.auditLogs.length, 1);
     assert.strictEqual(mock.auditLogs[0].targetUid, 'patient_uid_002');
     assert.strictEqual(mock.auditLogs[0].newRole, 'doctor');
+  });
+
+  // Test 13: Admin declines pending role request
+  await test('13. Admin declines pending role request (HTTP 200, requestedRole cleared, role preserved)', async () => {
+    mock.reset();
+    assert.strictEqual(mock.firestoreUsers.get('patient_uid_002').requestedRole, 'doctor');
+    assert.strictEqual(mock.firestoreUsers.get('patient_uid_002').role, 'patient');
+
+    const res = await mock.handlePatch('Bearer admin_uid_001', {
+      targetUid: 'patient_uid_002',
+      action: 'decline_request'
+    });
+
+    assert.strictEqual(res.status, 200);
+    assert.strictEqual(res.body.success, true);
+    assert.strictEqual(res.body.declinedRole, 'doctor');
+
+    const fsData = mock.firestoreUsers.get('patient_uid_002');
+    assert.strictEqual(fsData.role, 'patient');
+    assert.strictEqual(fsData.requestedRole, undefined);
+    assert.strictEqual(mock.authUsers.get('patient_uid_002').customClaims.role, undefined);
+    assert.strictEqual(mock.auditLogs.length, 1);
+    assert.strictEqual(mock.auditLogs[0].action, 'decline_request');
   });
 
   console.log('\n========================================================');
