@@ -75,11 +75,15 @@ Medicore-AI is an AI-powered healthcare management platform built on Next.js 16 
 
 ## Planned Future Phases
 
-### Phase 2: Firebase Restoration & Environment Configuration
-- Link authorized live Firebase project.
-- Deploy verified `firestore.rules` to live project.
-- Seed initial users and custom claims via Admin SDK script.
-- Verify live authentication and dashboard routing online.
+### Completed: Phase 2 — Firebase Infrastructure Restoration
+- **New Exhibition Project Provisioned:** Created fresh Firebase Project `medicore-ai-exhibition` (Display Name: `MEDICORE-AI Exhibition`, Project Number: `82891599621`) via Firebase MCP. Revoked project completely decommissioned.
+- **Web App Registered:** Created `MEDICORE-AI Web` (`1:82891599621:web:dd96c5facd93fb27ea516c`).
+- **Environment Secured:** Populated `.env.local` with fresh web client configuration. Retained server-side `GEMINI_API_KEY`. Verified `.gitignore` prevents secret leaks.
+- **Authentication Configured:** Enabled Email/Password provider on live project using Firebase MCP and CLI deployment.
+- **Cloud Firestore Native Provisioned:** Created Native Mode database `(default)` in owner-approved region `asia-south1` (Mumbai, India).
+- **Hardened Rules Deployed:** Deployed `firestore.rules` and indexes (`firestore.indexes.json`) directly to live project `medicore-ai-exhibition`. Unused composite index removed.
+- **Custom Claims Architecture:** Verified trusted claims workflow using Firebase MCP `auth_update_user`. Administrator provisioning ready pending owner target UID submission.
+- **Verification & Certification:** 45/45 tests passing on Firestore emulator, 0 ESLint errors, 0 TypeScript errors, clean Next.js 16 production build.
 
 ### Phase 3: Feature 1 — Menstrual Health Management Module
 - Implement opt-in menstrual health tracker for patients with private subcollection storage.
