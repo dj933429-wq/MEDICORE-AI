@@ -8,7 +8,9 @@
     "start": "next start",
     "lint": "eslint",
     "test:security": "npx -y firebase-tools emulators:exec --only firestore \"node tests/firestore-security.test.mjs\"",
-    "test:admin": "node tests/admin-roles.test.mjs"
+    "test:admin": "node tests/admin-roles.test.mjs",
+    "seed:users": "node --env-file=.env.local scripts/seed-test-users.mjs",
+    "clean:users": "node --env-file=.env.local scripts/clean-test-users.mjs"
   },
   "dependencies": {
     "@google/generative-ai": "^0.24.1",
