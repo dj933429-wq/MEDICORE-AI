@@ -94,6 +94,17 @@ Medicore-AI is an AI-powered healthcare management platform built on Next.js 16 
 
 ---
 
+### Completed: Phase 2.3 — Admin Role Management System
+- **Server-Only Firebase Admin SDK (`src/lib/firebaseAdmin.ts`):** Initialized Firebase Admin SDK with support for Application Default Credentials (ADC) and environment-injected service account keys (`FIREBASE_SERVICE_ACCOUNT_KEY`). Configured server-only protection to ensure zero client-side credential exposure.
+- **Secure Admin API Route (`src/app/api/admin/users/route.ts`):**
+  - `GET`: Authenticates admin ID tokens, verifies `decodedToken.role === 'admin'`, and retrieves all users with their authoritative Custom Claims merged with profile metadata.
+  - `PATCH`: Validates admin authorization, enforces role allowlist (`patient`, `doctor`, `pharmacist`), disallows admin self-modification and escalation to `admin`, updates Firebase Auth Custom Claims, synchronizes the Firestore `users/{uid}` role projection, auto-clears approved `requestedRole` requests, and writes administrative audit records to `adminAuditLogs`.
+- **Interactive Admin Dashboard (`src/app/dashboard/AdminDashboard.tsx`):** Built responsive UI with live user directory, search filter, role selector dropdowns, pending role request approval badges, confirmation modals, loading spinners, and role change notices. The current admin's own account is protected from self-demotion.
+- **Automated Test Suite (`tests/admin-roles.test.mjs`):** Implemented 12 comprehensive unit test assertions verifying authentication barriers, role transitions, claim preservation, and Firestore projections with 12/12 passing.
+- **Verification & Build:** 12/12 admin tests passing, 45/45 emulator tests passing, 0 ESLint errors, 0 TypeScript errors, clean Next.js 16 production compilation across all 10 routes.
+
+---
+
 ### Phase 3: Feature 1 — Menstrual Health Management Module
 - Implement opt-in menstrual health tracker for patients with private subcollection storage.
 
