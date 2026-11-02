@@ -329,19 +329,48 @@ export default function AdminDashboard() {
               <p className="text-slate-500 font-medium text-sm">Loading authoritative user directory...</p>
             </div>
           ) : error ? (
-            <div className="p-12 text-center">
-              <div className="w-12 h-12 bg-red-100 text-red-600 rounded-full flex items-center justify-center mx-auto mb-3">
-                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <div className="p-8 sm:p-12 text-center max-w-2xl mx-auto">
+              <div className="w-14 h-14 bg-amber-50 text-amber-600 rounded-full flex items-center justify-center mx-auto mb-4 border border-amber-200">
+                <svg className="w-7 h-7" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
                 </svg>
               </div>
-              <h3 className="text-base font-semibold text-slate-800 mb-1">Failed to Load User Directory</h3>
-              <p className="text-sm text-slate-500 mb-4">{error}</p>
+              <h3 className="text-lg font-bold text-slate-800 mb-2">Firebase Admin SDK Credentials Required</h3>
+              <p className="text-sm text-slate-600 mb-6 leading-relaxed">
+                {error}
+              </p>
+
+              <div className="bg-slate-50 border border-slate-200 rounded-2xl p-5 text-left mb-6 text-xs text-slate-700 space-y-3">
+                <p className="font-semibold text-slate-800 flex items-center gap-2">
+                  <span className="w-5 h-5 rounded-full bg-blue-100 text-blue-700 flex items-center justify-center text-[10px]">1</span>
+                  Option 1: Add Service Account Key to .env.local (Recommended)
+                </p>
+                <p className="text-slate-500 pl-7 leading-relaxed">
+                  Go to <strong>Firebase Console &rarr; Project Settings &rarr; Service accounts</strong>, click <strong>Generate new private key</strong>, and add the minified JSON to your local <code>.env.local</code>:
+                </p>
+                <div className="pl-7">
+                  <pre className="bg-slate-900 text-slate-100 p-3 rounded-xl overflow-x-auto text-[11px] font-mono">
+                    FIREBASE_SERVICE_ACCOUNT_KEY=&#123;&quot;type&quot;:&quot;service_account&quot;,...&#125;
+                  </pre>
+                </div>
+
+                <p className="font-semibold text-slate-800 flex items-center gap-2 pt-2 border-t border-slate-200/60">
+                  <span className="w-5 h-5 rounded-full bg-blue-100 text-blue-700 flex items-center justify-center text-[10px]">2</span>
+                  Option 2: Google Cloud Application Default Credentials (ADC)
+                </p>
+                <p className="text-slate-500 pl-7 leading-relaxed">
+                  Run in terminal: <code>gcloud auth application-default login</code>
+                </p>
+              </div>
+
               <button
                 onClick={fetchUsers}
-                className="px-4 py-2 bg-blue-600 text-white rounded-xl text-sm font-semibold hover:bg-blue-700 transition-colors"
+                className="inline-flex items-center gap-2 px-6 py-2.5 bg-blue-600 text-white rounded-xl text-sm font-semibold hover:bg-blue-700 transition-colors shadow-sm"
               >
-                Retry
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                </svg>
+                Retry Connection
               </button>
             </div>
           ) : (

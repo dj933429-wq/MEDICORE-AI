@@ -96,7 +96,16 @@ export async function GET(req: Request) {
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
     console.error('[AdminUsersAPI] Failed to fetch users:', message);
-    return NextResponse.json({ error: 'Internal server error fetching user directory' }, { status: 500 });
+
+    if (message.includes('Could not load the default credentials') || 
+        message.includes('NO_ADC_FOUND') || 
+        message.includes('credential')) {
+      return NextResponse.json({ 
+        error: 'Firebase Admin SDK credentials missing on server runtime. To enable server-side role management, provide FIREBASE_SERVICE_ACCOUNT_KEY in .env.local or configure Application Default Credentials.' 
+      }, { status: 500 });
+    }
+
+    return NextResponse.json({ error: `Failed to fetch user directory: ${message}` }, { status: 500 });
   }
 }
 
@@ -234,7 +243,16 @@ export async function PATCH(req: Request) {
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
     console.error('[AdminUsersAPI] PATCH error:', message);
-    return NextResponse.json({ error: 'Internal server error applying role change' }, { status: 500 });
+
+    if (message.includes('Could not load the default credentials') || 
+        message.includes('NO_ADC_FOUND') || 
+        message.includes('credential')) {
+      return NextResponse.json({ 
+        error: 'Firebase Admin SDK credentials missing on server runtime. To enable server-side role management, provide FIREBASE_SERVICE_ACCOUNT_KEY in .env.local or configure Application Default Credentials.' 
+      }, { status: 500 });
+    }
+
+    return NextResponse.json({ error: `Failed to apply role change: ${message}` }, { status: 500 });
   }
 }
 
