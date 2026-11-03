@@ -1,0 +1,190 @@
+// =============================================================================
+// MEDICORE-AI — Phase 4A Proposed Firestore Security Rules Fragment
+// FILE: docs/phase-4/blood-bank-firestore-rules.fragment
+//
+// NOTICE: THIS FILE IS A DRAFT PROPOSAL FOR FUTURE INTEGRATION.
+// IT IS NOT A DEPLOYABLE REPLACEMENT OF PRODUCTION firestore.rules.
+// DO NOT OVERWRITE THE PRODUCTION firestore.rules FILE WITH THIS FRAGMENT.
+//
+// INTEGRATION INSTRUCTIONS:
+// In a future integration sprint (Phase 4B/4C), this block should be spliced
+// inside the `service cloud.firestore { match /databases/{database}/documents { ... } }`
+// block of the root `firestore.rules`.
+//
+// PREREQUISITES IN ROOT RULES:
+// 1. `isAuthenticated()` helper: request.auth != null
+// 2. `hasRole(roleName)` helper: isAuthenticated() && request.auth.token.role == roleName
+// 3. `isBloodBank()` helper: hasRole('blood_bank')
+// =============================================================================
+
+    // =========================================================================
+    // 8. Isolated Blood Bank Subsystem (Namespace: bloodBank/{centerId}/...)
+    // =========================================================================
+    match /bloodBank/{centerId} {
+      // Center metadata document (if present): read-only for blood bank staff
+      allow read: if isAuthenticated() && isBloodBank();
+      allow write: if false; // Center documents provisioned via Admin SDK only
+
+      // -----------------------------------------------------------------------
+      // 8.1 Donors Registry
+      // Confidential donor identity, contact, eligibility, and screening status.
+      // Strictly restricted to authorized blood bank staff.
+      // Other roles (patient, doctor, pharmacist, admin) DENIED.
+      // -----------------------------------------------------------------------
+      match /donors/{donorId} {
+        allow read: if isAuthenticated() && isBloodBank();
+        
+        allow create: if isAuthenticated() && isBloodBank()
+          && request.resource.data.keys().hasAll([
+            'id', 'centerId', 'fullName', 'nationalIdOrPassport', 'dateOfBirth',
+            'gender', 'bloodGroup', 'contact', 'eligibilityStatus', 'donationCount',
+            'verifiedByStaffUid', 'createdAt', 'updatedAt'
+          ])
+          && request.resource.data.bloodGroup in ['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-']
+          && request.resource.data.eligibilityStatus in ['eligible', 'temporarily_deferred', 'permanently_deferred', 'pending_screening']
+          && request.resource.data.verifiedByStaffUid == request.auth.uid;
+
+        allow update: if isAuthenticated() && isBloodBank()
+          && request.resource.data.id == resource.data.id
+          && request.resource.data.centerId == resource.data.centerId
+          && request.resource.data.createdAt == resource.data.createdAt
+          && request.resource.data.bloodGroup in ['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-']
+          && request.resource.data.eligibilityStatus in ['eligible', 'temporarily_deferred', 'permanently_deferred', 'pending_screening'];
+
+        allow delete: if false; // Donors cannot be hard-deleted; status transitions to deferred
+      }
+
+      // -----------------------------------------------------------------------
+      // 8.2 Blood Donations Log
+      // Collection draw records, volume, screening laboratory panel status.
+      // -----------------------------------------------------------------------
+      match /donations/{donationId} {
+        allow read: if isAuthenticated() && isBloodBank();
+
+        allow create: if isAuthenticated() && isBloodBank()
+          && request.resource.data.keys().hasAll([
+            'id', 'centerId', 'donorId', 'donorName', 'bloodGroup', 'donationDate',
+            'volumeMl', 'collectionStatus', 'screeningStatus', 'collectionStaffUid',
+            'createdAt', 'updatedAt'
+          ])
+          && request.resource.data.bloodGroup in ['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-']
+          && request.resource.data.collectionStatus in ['completed', 'partial', 'adverse_reaction', 'cancelled']
+          && request.resource.data.screeningStatus in ['pending', 'tested_passed', 'tested_failed', 'quarantined']
+          && request.resource.data.volumeMl >= 100 && request.resource.data.volumeMl <= 600
+          && request.resource.data.collectionStaffUid == request.auth.uid;
+
+        allow update: if isAuthenticated() && isBloodBank()
+          && request.resource.data.id == resource.data.id
+          && request.resource.data.donorId == resource.data.donorId
+          && request.resource.data.createdAt == resource.data.createdAt
+          && request.resource.data.collectionStatus in ['completed', 'partial', 'adverse_reaction', 'cancelled']
+          && request.resource.data.screeningStatus in ['pending', 'tested_passed', 'tested_failed', 'quarantined'];
+
+        allow delete: if false; // Permanent audit preservation
+      }
+
+      // -----------------------------------------------------------------------
+      // 8.3 Blood Inventory Units
+      // Individual component units with barcode, shelf life, and storage location.
+      // -----------------------------------------------------------------------
+      match /inventory/{unitId} {
+        allow read: if isAuthenticated() && isBloodBank();
+
+        allow create: if isAuthenticated() && isBloodBank()
+          && request.resource.data.keys().hasAll([
+            'id', 'centerId', 'donationId', 'donorId', 'bloodGroup', 'componentType',
+            'collectionDate', 'expiryDate', 'volumeMl', 'storageLocation', 'status',
+            'createdAt', 'updatedAt'
+          ])
+          && request.resource.data.bloodGroup in ['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-']
+          && request.resource.data.componentType in ['whole_blood', 'red_blood_cells', 'platelets', 'fresh_frozen_plasma', 'cryoprecipitate']
+          && request.resource.data.status in ['available', 'reserved', 'quarantine', 'transfused', 'expired', 'discarded']
+          && request.resource.data.volumeMl > 0;
+
+        allow update: if isAuthenticated() && isBloodBank()
+          && request.resource.data.id == resource.data.id
+          && request.resource.data.donationId == resource.data.donationId
+          && request.resource.data.bloodGroup == resource.data.bloodGroup
+          && request.resource.data.componentType == resource.data.componentType
+          && request.resource.data.collectionDate == resource.data.collectionDate
+          && request.resource.data.createdAt == resource.data.createdAt
+          && request.resource.data.status in ['available', 'reserved', 'quarantine', 'transfused', 'expired', 'discarded'];
+
+        allow delete: if false; // Units transition to 'discarded' or 'transfused', never deleted
+      }
+
+      // -----------------------------------------------------------------------
+      // 8.4 Blood Transfusion Requests
+      // Hospital / Clinical facility supply orders.
+      // -----------------------------------------------------------------------
+      match /requests/{requestId} {
+        allow read: if isAuthenticated() && isBloodBank();
+
+        allow create: if isAuthenticated() && isBloodBank()
+          && request.resource.data.keys().hasAll([
+            'id', 'centerId', 'requestingOrganization', 'bloodGroup', 'componentType',
+            'quantityUnits', 'urgency', 'requiredByDate', 'status',
+            'createdAt', 'updatedAt'
+          ])
+          && request.resource.data.bloodGroup in ['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-']
+          && request.resource.data.componentType in ['whole_blood', 'red_blood_cells', 'platelets', 'fresh_frozen_plasma', 'cryoprecipitate']
+          && request.resource.data.urgency in ['routine', 'urgent', 'emergency_stat']
+          && request.resource.data.status in ['submitted', 'under_review', 'approved', 'partially_fulfilled', 'fulfilled', 'rejected', 'cancelled']
+          && request.resource.data.quantityUnits >= 1 && request.resource.data.quantityUnits <= 50;
+
+        allow update: if isAuthenticated() && isBloodBank()
+          && request.resource.data.id == resource.data.id
+          && request.resource.data.createdAt == resource.data.createdAt
+          && request.resource.data.status in ['submitted', 'under_review', 'approved', 'partially_fulfilled', 'fulfilled', 'rejected', 'cancelled'];
+
+        allow delete: if false; // Cancelled requests retain status 'cancelled'
+      }
+
+      // -----------------------------------------------------------------------
+      // 8.5 Distribution / Dispatches
+      // Issued blood units, verified cold-chain logs, recipient hospital tracking.
+      // -----------------------------------------------------------------------
+      match /issues/{issueId} {
+        allow read: if isAuthenticated() && isBloodBank();
+
+        allow create: if isAuthenticated() && isBloodBank()
+          && request.resource.data.keys().hasAll([
+            'id', 'centerId', 'requestId', 'destinationOrganization', 'issuedUnitIds',
+            'authorizedStaffUid', 'dispatchStatus', 'temperatureLogVerified',
+            'createdAt', 'updatedAt'
+          ])
+          && request.resource.data.dispatchStatus in ['prepared', 'dispatched', 'in_transit', 'delivered', 'cancelled']
+          && request.resource.data.authorizedStaffUid == request.auth.uid
+          && request.resource.data.temperatureLogVerified == true
+          && request.resource.data.issuedUnitIds.size() > 0;
+
+        allow update: if isAuthenticated() && isBloodBank()
+          && request.resource.data.id == resource.data.id
+          && request.resource.data.requestId == resource.data.requestId
+          && request.resource.data.createdAt == resource.data.createdAt
+          && request.resource.data.dispatchStatus in ['prepared', 'dispatched', 'in_transit', 'delivered', 'cancelled'];
+
+        allow delete: if false;
+      }
+
+      // -----------------------------------------------------------------------
+      // 8.6 Immutable Operational Audit Logs
+      // Append-only audit events. Mutations (update, delete) strictly denied.
+      // -----------------------------------------------------------------------
+      match /auditLogs/{auditId} {
+        allow read: if isAuthenticated() && isBloodBank();
+
+        allow create: if isAuthenticated() && isBloodBank()
+          && request.resource.data.keys().hasAll([
+            'id', 'centerId', 'actorUid', 'actorRole', 'action', 'entity',
+            'entityId', 'timestamp'
+          ])
+          && request.resource.data.actorUid == request.auth.uid
+          && request.resource.data.actorRole == 'blood_bank'
+          && request.resource.data.entity in ['donor', 'donation', 'inventory', 'request', 'distribution', 'system'];
+
+        // Strict append-only: modifications and deletions permanently denied
+        allow update: if false;
+        allow delete: if false;
+      }
+    }

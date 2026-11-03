@@ -288,5 +288,15 @@ Medicore-AI is an AI-powered healthcare management platform built on Next.js 16 
 
 ---
 
-### Phase 4: Feature 2 - Blood Bank Management System
-- Implement donor, inventory, and blood request portal for hospitals, patients, and blood banks.
+### In Progress: Phase 4A — Isolated Blood Bank Development
+- **Status:** In Progress (Strict Isolation Mode in worktree ../MEDICORE-AI-blood-bank on branch eature/blood-bank-management).
+- **Baseline Commit:** ee00a5b5701a2bb1abf77a958cb3c488c887657 (Phase 3 Menstrual Health Foundation).
+- **Core Architecture & Isolation Plan:**
+  - **Zero Regression Guarantee:** Zero modifications to existing auth providers (src/lib/auth.js), root routing (Dashboard.tsx, layout.tsx, Navbar.tsx), existing dashboards (Doctor, Patient, Pharmacist, Admin), menstrual health modules, or existing irestore.rules.
+  - **Isolated Route & Guard:** Independent route /dashboard/blood-bank with direct access guard utilizing useAuth(). Unauthenticated users redirected to /login; authenticated users without verified Custom Claim 
+ole === 'blood_bank' denied access with dedicated explanatory refusal view.
+  - **Domain Architecture:** Strict TypeScript models for Donors, Donations, Inventory Units, Blood Requests, Distribution/Issues, and Audit Logs in src/lib/blood-bank/types.ts.
+  - **Non-Automated Clinical Guardrail:** System strictly records staff-verified and laboratory-tested outcomes. No automated clinical eligibility or transfusion compatibility decisions are computed by software.
+  - **Firestore Namespace Isolation:** Draft rules proposed in docs/phase-4/blood-bank-firestore-rules.fragment for namespace loodBank/{centerId}/** with append-only audit trail and strict cross-role denial.
+  - **Dashboard Modules:** 7 dedicated operational views with honest empty states (Overview, Donors, Donations, Inventory, Requests, Distribution, Reports).
+  - **Testing Strategy:** Independent emulator test suite in 	ests/blood-bank/ with temporary combined rules fixture and zero synthetic production data writes. Full regression pass on existing suites.
