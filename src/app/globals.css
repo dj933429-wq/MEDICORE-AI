@@ -1,7 +1,39 @@
 @import "tailwindcss";
 
 @theme {
-  --font-sans: "Inter", system-ui, sans-serif;
+  --font-sans: "Plus Jakarta Sans", "Inter", system-ui, -apple-system, sans-serif;
+  --font-serif: "Playfair Display", Georgia, serif;
+  --font-display: "Playfair Display", Georgia, serif;
+
+  --color-surface: #FCF9F6;
+  --color-surface-dim: #DCDAD7;
+  --color-surface-bright: #FCF9F6;
+  --color-surface-container-lowest: #FFFFFF;
+  --color-surface-container-low: #F6F3F0;
+  --color-surface-container: #F0EDEA;
+  --color-surface-container-high: #EAE8E5;
+  --color-surface-container-highest: #E5E2DF;
+  --color-on-surface: #1C1C1A;
+  --color-on-surface-variant: #524345;
+  --color-outline: #847375;
+  --color-outline-variant: #D6C2C4;
+  --color-primary: #894C58;
+  --color-on-primary: #FFFFFF;
+  --color-primary-container: #C9828F;
+  --color-on-primary-container: #501D29;
+  --color-primary-fixed: #FFD9DE;
+  --color-on-primary-fixed: #380A17;
+  --color-secondary: #6F5769;
+  --color-on-secondary: #FFFFFF;
+  --color-secondary-container: #F6D7EC;
+  --color-on-secondary-container: #745B6D;
+  --color-secondary-fixed: #F9DAEF;
+  --color-tertiary: #546250;
+  --color-on-tertiary: #FFFFFF;
+  --color-tertiary-container: #8B9A86;
+  --color-tertiary-fixed: #D8E7D0;
+  --color-on-tertiary-fixed: #121F11;
+  --color-inverse-surface: #31302F;
 }
 
 body {

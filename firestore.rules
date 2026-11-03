@@ -48,6 +48,36 @@ service cloud.firestore {
     }
 
     // =========================================================================
+    // Menstrual Health Specific Security Helpers (Strict Patient Owner)
+    // =========================================================================
+    function isStrictPatientOwner(userId) {
+      return isAuthenticated()
+        && request.auth.uid == userId
+        // Deny all privileged staff roles even on their own UID paths
+        && !('role' in request.auth.token && request.auth.token.role in ['admin', 'doctor', 'pharmacist', 'blood_bank'])
+        // Deny any unknown/unauthorized role claims; only allow explicit 'patient' or standard claimless patient signups
+        && (!('role' in request.auth.token) || request.auth.token.role == 'patient');
+    }
+
+    function isISODateString(val) {
+      return val is string && val.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$');
+    }
+
+    function areValidSymptoms(list) {
+      return list.hasOnly([
+        'cramps',
+        'headache',
+        'bloating',
+        'acne',
+        'breast_tenderness',
+        'back_pain',
+        'fatigue',
+        'nausea',
+        'other'
+      ]);
+    }
+
+    // =========================================================================
     // 1. Users Directory: Private Profile Isolation (Owner & Admin Only)
     // =========================================================================
     match /users/{userId} {
@@ -66,6 +96,74 @@ service cloud.firestore {
         (isDoctor() && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['doctorId']));
 
       allow delete: if isAdmin();
+
+      // -----------------------------------------------------------------------
+      // 1.1 Menstrual Records Subcollection (Strict Patient Isolation)
+      // -----------------------------------------------------------------------
+      match /menstrualRecords/{recordId} {
+        allow read, delete: if isStrictPatientOwner(userId);
+
+        allow create: if isStrictPatientOwner(userId)
+          && recordId == ('period_' + request.resource.data.startDate)
+          && request.resource.data.keys().hasAll(['startDate', 'flow', 'source', 'createdAt', 'updatedAt'])
+          && request.resource.data.keys().hasOnly(['startDate', 'endDate', 'flow', 'source', 'notes', 'createdAt', 'updatedAt'])
+          && isISODateString(request.resource.data.startDate)
+          && (!('endDate' in request.resource.data) || request.resource.data.endDate == null || (isISODateString(request.resource.data.endDate) && request.resource.data.endDate >= request.resource.data.startDate))
+          && request.resource.data.flow in ['light', 'medium', 'heavy']
+          && request.resource.data.source == 'user'
+          && (!('notes' in request.resource.data) || (request.resource.data.notes is string && request.resource.data.notes.size() <= 1000))
+          && request.resource.data.createdAt == request.time
+          && request.resource.data.updatedAt == request.time;
+
+        allow update: if isStrictPatientOwner(userId)
+          && request.resource.data.keys().hasAll(['startDate', 'flow', 'source', 'createdAt', 'updatedAt'])
+          && request.resource.data.keys().hasOnly(['startDate', 'endDate', 'flow', 'source', 'notes', 'createdAt', 'updatedAt'])
+          && request.resource.data.startDate == resource.data.startDate
+          && request.resource.data.createdAt == resource.data.createdAt
+          && request.resource.data.source == resource.data.source
+          && (!('endDate' in request.resource.data) || request.resource.data.endDate == null || (isISODateString(request.resource.data.endDate) && request.resource.data.endDate >= request.resource.data.startDate))
+          && request.resource.data.flow in ['light', 'medium', 'heavy']
+          && (!('notes' in request.resource.data) || (request.resource.data.notes is string && request.resource.data.notes.size() <= 1000))
+          && request.resource.data.updatedAt == request.time;
+      }
+
+      // -----------------------------------------------------------------------
+      // 1.2 Menstrual Daily Logs Subcollection (Strict Patient Isolation)
+      // -----------------------------------------------------------------------
+      match /menstrualLogs/{logId} {
+        allow read, delete: if isStrictPatientOwner(userId);
+
+        allow create: if isStrictPatientOwner(userId)
+          && logId == ('log_' + request.resource.data.date)
+          && request.resource.data.keys().hasAll(['date', 'flow', 'symptoms', 'source', 'createdAt', 'updatedAt'])
+          && request.resource.data.keys().hasOnly(['date', 'flow', 'symptoms', 'mood', 'energy', 'sleepHours', 'sleepQuality', 'notes', 'source', 'createdAt', 'updatedAt'])
+          && isISODateString(request.resource.data.date)
+          && request.resource.data.flow in ['none', 'spotting', 'light', 'medium', 'heavy']
+          && request.resource.data.symptoms is list && request.resource.data.symptoms.size() <= 9 && areValidSymptoms(request.resource.data.symptoms)
+          && request.resource.data.source == 'user'
+          && (!('mood' in request.resource.data) || request.resource.data.mood == null || request.resource.data.mood in ['happy', 'calm', 'anxious', 'irritable', 'sad'])
+          && (!('energy' in request.resource.data) || request.resource.data.energy == null || (request.resource.data.energy is int && request.resource.data.energy >= 1 && request.resource.data.energy <= 5))
+          && (!('sleepHours' in request.resource.data) || request.resource.data.sleepHours == null || ((request.resource.data.sleepHours is int || request.resource.data.sleepHours is float) && request.resource.data.sleepHours >= 0 && request.resource.data.sleepHours <= 24))
+          && (!('sleepQuality' in request.resource.data) || request.resource.data.sleepQuality == null || request.resource.data.sleepQuality in ['restful', 'disrupted', 'insomnia'])
+          && (!('notes' in request.resource.data) || (request.resource.data.notes is string && request.resource.data.notes.size() <= 2000))
+          && request.resource.data.createdAt == request.time
+          && request.resource.data.updatedAt == request.time;
+
+        allow update: if isStrictPatientOwner(userId)
+          && request.resource.data.keys().hasAll(['date', 'flow', 'symptoms', 'source', 'createdAt', 'updatedAt'])
+          && request.resource.data.keys().hasOnly(['date', 'flow', 'symptoms', 'mood', 'energy', 'sleepHours', 'sleepQuality', 'notes', 'source', 'createdAt', 'updatedAt'])
+          && request.resource.data.date == resource.data.date
+          && request.resource.data.createdAt == resource.data.createdAt
+          && request.resource.data.source == resource.data.source
+          && request.resource.data.flow in ['none', 'spotting', 'light', 'medium', 'heavy']
+          && request.resource.data.symptoms is list && request.resource.data.symptoms.size() <= 9 && areValidSymptoms(request.resource.data.symptoms)
+          && (!('mood' in request.resource.data) || request.resource.data.mood == null || request.resource.data.mood in ['happy', 'calm', 'anxious', 'irritable', 'sad'])
+          && (!('energy' in request.resource.data) || request.resource.data.energy == null || (request.resource.data.energy is int && request.resource.data.energy >= 1 && request.resource.data.energy <= 5))
+          && (!('sleepHours' in request.resource.data) || request.resource.data.sleepHours == null || ((request.resource.data.sleepHours is int || request.resource.data.sleepHours is float) && request.resource.data.sleepHours >= 0 && request.resource.data.sleepHours <= 24))
+          && (!('sleepQuality' in request.resource.data) || request.resource.data.sleepQuality == null || request.resource.data.sleepQuality in ['restful', 'disrupted', 'insomnia'])
+          && (!('notes' in request.resource.data) || (request.resource.data.notes is string && request.resource.data.notes.size() <= 2000))
+          && request.resource.data.updatedAt == request.time;
+      }
     }
 
     // =========================================================================

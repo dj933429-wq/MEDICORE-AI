@@ -1,6 +1,7 @@
-'use client';
+﻿'use client';
 
 import { useState, useEffect, useRef } from 'react';
+import Link from 'next/link';
 import { useAuth } from '../../lib/auth';
 import { db } from '../../lib/firebase';
 import { collection, query, getDocs, orderBy, doc, getDoc, where, addDoc, serverTimestamp } from 'firebase/firestore';
@@ -308,12 +309,21 @@ export default function PatientDashboard() {
             </h1>
             <p className="text-gray-600">Here is your clinical dashboard and schedules.</p>
           </div>
-          <button 
-            onClick={() => setShowModal(true)}
-            className="bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 px-6 rounded-lg shadow-md transition-colors whitespace-nowrap"
-          >
-            + Book Appointment
-          </button>
+          <div className="flex flex-wrap items-center gap-3">
+            <Link
+              href="/dashboard/menstrual-health"
+              className="bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 font-semibold py-3 px-5 rounded-lg shadow-xs transition-colors flex items-center gap-2 whitespace-nowrap"
+            >
+              <span>🌸</span>
+              <span>Menstrual Health Tracker</span>
+            </Link>
+            <button
+              onClick={() => setShowModal(true)}
+              className="bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 px-6 rounded-lg shadow-md transition-colors whitespace-nowrap"
+            >
+              + Book Appointment
+            </button>
+          </div>
         </header>
 
         {/* Modal Override Block */}
@@ -403,8 +413,8 @@ export default function PatientDashboard() {
                         {getStatusBadge(appt.status)}
                       </div>
                       <div className="text-gray-600 font-medium flex gap-4 text-sm bg-gray-50 p-3 rounded-lg border border-gray-200">
-                         <span>📅 {appt.date}</span>
-                         <span>⏰ {appt.time}</span>
+                         <span>ðŸ“… {appt.date}</span>
+                         <span>â° {appt.time}</span>
                       </div>
                       {appt.notes && <p className="text-gray-500 text-sm mt-1 flex-1">{appt.notes}</p>}
                     </div>

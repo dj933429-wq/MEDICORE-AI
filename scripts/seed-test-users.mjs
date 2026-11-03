@@ -1,4 +1,4 @@
-import { initializeApp, cert } from 'firebase-admin/app';
+﻿import { initializeApp, cert } from 'firebase-admin/app';
 import { getAuth } from 'firebase-admin/auth';
 import { getFirestore } from 'firebase-admin/firestore';
 
@@ -17,6 +17,14 @@ export const TEST_USERS = [
     email: 'sarah.patient@medicore.ai',
     password: 'TestPassword123!',
     displayName: 'Sarah Jenkins',
+    role: 'patient',
+    requestedRole: null,
+    claims: {}
+  },
+  {
+    email: 'alex.patient@medicore.ai',
+    password: 'TestPassword123!',
+    displayName: 'Alex Miller',
     role: 'patient',
     requestedRole: null,
     claims: {}
@@ -63,7 +71,7 @@ async function seed() {
       // Check if user already exists
       const existing = await auth.getUserByEmail(userConfig.email).catch(() => null);
       if (existing) {
-        console.log(`[EXISTS] ${userConfig.email} (${existing.uid}) — updating...`);
+        console.log(`[EXISTS] ${userConfig.email} (${existing.uid}) â€” updating...`);
         uid = existing.uid;
         await auth.updateUser(uid, {
           displayName: userConfig.displayName,

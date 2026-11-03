@@ -40,6 +40,11 @@ pnpm-debug.log*
 
 # vercel
 .vercel
+vercel-recovery-codes-*.txt
+
+# handoff & archives
+*.zip
+MEDICORE_Menstrual_Health_Integration_Handoff/
 
 # typescript
 *.tsbuildinfo
