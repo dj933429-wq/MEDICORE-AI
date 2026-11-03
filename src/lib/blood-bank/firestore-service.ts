@@ -1,9 +1,12 @@
 /**
  * MEDICORE-AI — Isolated Blood Bank Firestore Service
  * Namespaced client operations under `bloodBank/{centerId}/...`
+ * (Phase 4A.1 Hardened: All multi-entity and audit writes are strictly ATOMIC)
  *
  * All operations require authenticated staff with role 'blood_bank'.
- * Audit logs are written on every state-altering mutation.
+ * Audit logs and operational mutations are committed atomically via Firestore
+ * transactions (`runTransaction`) and write batches (`writeBatch`), ensuring
+ * partial failures can never desynchronize inventory, donor metrics, or audit logs.
  */
 
 import { db } from '@/lib/firebase';
@@ -11,12 +14,11 @@ import {
   collection,
   doc,
   getDocs,
-  getDoc,
-  setDoc,
-  updateDoc,
   query,
   orderBy,
   limit,
+  writeBatch,
+  runTransaction,
 } from 'firebase/firestore';
 import {
   BloodDonor,
@@ -25,7 +27,6 @@ import {
   BloodRequest,
   BloodDistribution,
   BloodBankAuditEvent,
-  BloodBankMetrics,
   InventoryUnitStatus,
   RequestStatus,
 } from './types';
@@ -45,12 +46,12 @@ function getCenterId(centerId?: string): string {
 }
 
 /**
- * Generate a unique audit event and append to auditLogs
+ * Helper to build an audit event object and its DocumentReference
  */
-async function appendAuditLog(
+function createAuditRefAndEvent(
   centerId: string,
   event: Omit<BloodBankAuditEvent, 'id' | 'centerId' | 'timestamp'>
-): Promise<void> {
+) {
   const auditId = `audit_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
   const auditRef = doc(db, 'bloodBank', centerId, 'auditLogs', auditId);
   const fullEvent: BloodBankAuditEvent = {
@@ -59,7 +60,7 @@ async function appendAuditLog(
     ...event,
     timestamp: new Date().toISOString(),
   };
-  await setDoc(auditRef, fullEvent);
+  return { auditRef, fullEvent };
 }
 
 // =============================================================================
@@ -73,6 +74,9 @@ export async function fetchDonors(centerId = DEFAULT_BLOOD_BANK_CENTER_ID): Prom
   return snap.docs.map((d) => d.data() as BloodDonor);
 }
 
+/**
+ * Atomically creates a donor record and its immutable audit log
+ */
 export async function createDonor(
   payload: Omit<BloodDonor, 'id' | 'centerId' | 'createdAt' | 'updatedAt' | 'donationCount'>,
   actor: { uid: string; email?: string }
@@ -93,17 +97,25 @@ export async function createDonor(
   };
 
   const donorRef = doc(db, 'bloodBank', centerId, 'donors', donorId);
-  await setDoc(donorRef, newDonor);
-
-  await appendAuditLog(centerId, {
+  const { auditRef, fullEvent } = createAuditRefAndEvent(centerId, {
     actorUid: actor.uid,
     actorEmail: actor.email,
     actorRole: 'blood_bank',
     action: 'DONOR_REGISTERED',
     entity: 'donor',
     entityId: donorId,
-    details: { fullName: newDonor.fullName, bloodGroup: newDonor.bloodGroup },
+    details: {
+      donorReferenceId: newDonor.donorReferenceId,
+      fullName: newDonor.fullName,
+      bloodGroup: newDonor.bloodGroup,
+    },
   });
+
+  // Atomic batch write: donor + audit record
+  const batch = writeBatch(db);
+  batch.set(donorRef, newDonor);
+  batch.set(auditRef, fullEvent);
+  await batch.commit();
 
   return newDonor;
 }
@@ -119,6 +131,10 @@ export async function fetchDonations(centerId = DEFAULT_BLOOD_BANK_CENTER_ID): P
   return snap.docs.map((d) => d.data() as BloodDonation);
 }
 
+/**
+ * Atomically records a donation, increments donor donationCount (if completed),
+ * updates donor lastDonationDate, and writes audit event in a single transaction.
+ */
 export async function createDonation(
   payload: Omit<BloodDonation, 'id' | 'centerId' | 'createdAt' | 'updatedAt'>,
   actor: { uid: string; email?: string }
@@ -138,23 +154,8 @@ export async function createDonation(
   };
 
   const donationRef = doc(db, 'bloodBank', centerId, 'donations', donationId);
-  await setDoc(donationRef, newDonation);
-
-  // Update donor total donation count & last donation date if completed
-  if (payload.collectionStatus === 'completed') {
-    const donorRef = doc(db, 'bloodBank', centerId, 'donors', payload.donorId);
-    const donorSnap = await getDoc(donorRef);
-    if (donorSnap.exists()) {
-      const currentCount = donorSnap.data().donationCount || 0;
-      await updateDoc(donorRef, {
-        donationCount: currentCount + 1,
-        lastDonationDate: payload.donationDate.split('T')[0],
-        updatedAt: now,
-      });
-    }
-  }
-
-  await appendAuditLog(centerId, {
+  const donorRef = doc(db, 'bloodBank', centerId, 'donors', payload.donorId);
+  const { auditRef, fullEvent } = createAuditRefAndEvent(centerId, {
     actorUid: actor.uid,
     actorEmail: actor.email,
     actorRole: 'blood_bank',
@@ -165,7 +166,31 @@ export async function createDonation(
       donorId: newDonation.donorId,
       volumeMl: newDonation.volumeMl,
       collectionStatus: newDonation.collectionStatus,
+      screeningStatus: newDonation.screeningStatus,
     },
+  });
+
+  await runTransaction(db, async (tx) => {
+    // 1. Transactional reads must precede writes
+    const donorSnap = await tx.get(donorRef);
+    if (!donorSnap.exists()) {
+      throw new BloodBankValidationError(`Referenced donor ID ${payload.donorId} does not exist.`);
+    }
+
+    const currentCount = donorSnap.data().donationCount || 0;
+
+    // 2. Transactional writes
+    tx.set(donationRef, newDonation);
+
+    if (payload.collectionStatus === 'completed') {
+      tx.update(donorRef, {
+        donationCount: currentCount + 1,
+        lastDonationDate: payload.donationDate.split('T')[0],
+        updatedAt: now,
+      });
+    }
+
+    tx.set(auditRef, fullEvent);
   });
 
   return newDonation;
@@ -182,6 +207,10 @@ export async function fetchInventory(centerId = DEFAULT_BLOOD_BANK_CENTER_ID): P
   return snap.docs.map((d) => d.data() as BloodInventoryUnit);
 }
 
+/**
+ * Atomically verifies originating donation session, creates inventory unit,
+ * and records immutable audit log.
+ */
 export async function createInventoryUnit(
   payload: Omit<BloodInventoryUnit, 'centerId' | 'createdAt' | 'updatedAt'>,
   actor: { uid: string; email?: string }
@@ -199,9 +228,8 @@ export async function createInventoryUnit(
   };
 
   const unitRef = doc(db, 'bloodBank', centerId, 'inventory', newUnit.id);
-  await setDoc(unitRef, newUnit);
-
-  await appendAuditLog(centerId, {
+  const donRef = doc(db, 'bloodBank', centerId, 'donations', newUnit.donationId);
+  const { auditRef, fullEvent } = createAuditRefAndEvent(centerId, {
     actorUid: actor.uid,
     actorEmail: actor.email,
     actorRole: 'blood_bank',
@@ -216,9 +244,29 @@ export async function createInventoryUnit(
     },
   });
 
+  await runTransaction(db, async (tx) => {
+    // Verify originating donation exists
+    const donSnap = await tx.get(donRef);
+    if (!donSnap.exists()) {
+      throw new BloodBankValidationError(`Referenced donation session ${newUnit.donationId} does not exist.`);
+    }
+
+    const unitExistingSnap = await tx.get(unitRef);
+    if (unitExistingSnap.exists()) {
+      throw new BloodBankValidationError(`Inventory unit with Barcode ID ${newUnit.id} already exists.`);
+    }
+
+    tx.set(unitRef, newUnit);
+    tx.set(auditRef, fullEvent);
+  });
+
   return newUnit;
 }
 
+/**
+ * Atomically checks current unit status, verifies transition legality,
+ * updates inventory unit, and appends audit log in a single transaction.
+ */
 export async function updateInventoryStatus(
   unitId: string,
   newStatus: InventoryUnitStatus,
@@ -228,39 +276,43 @@ export async function updateInventoryStatus(
 ): Promise<void> {
   const cId = getCenterId(centerId);
   const unitRef = doc(db, 'bloodBank', cId, 'inventory', unitId);
-  const snap = await getDoc(unitRef);
-
-  if (!snap.exists()) {
-    throw new BloodBankValidationError(`Inventory unit with ID ${unitId} does not exist.`);
-  }
-
-  const currentUnit = snap.data() as BloodInventoryUnit;
-
-  if (!isValidInventoryTransition(currentUnit.status, newStatus)) {
-    throw new BloodBankValidationError(
-      `Illegal status transition: cannot change unit status from '${currentUnit.status}' to '${newStatus}'.`
-    );
-  }
-
   const now = new Date().toISOString();
-  await updateDoc(unitRef, {
-    status: newStatus,
-    statusReason: reason || null,
-    updatedAt: now,
-  });
 
-  await appendAuditLog(cId, {
-    actorUid: actor.uid,
-    actorEmail: actor.email,
-    actorRole: 'blood_bank',
-    action: 'INVENTORY_STATUS_UPDATED',
-    entity: 'inventory',
-    entityId: unitId,
-    statusTransition: {
-      from: currentUnit.status,
-      to: newStatus,
-    },
-    details: { reason },
+  await runTransaction(db, async (tx) => {
+    const snap = await tx.get(unitRef);
+    if (!snap.exists()) {
+      throw new BloodBankValidationError(`Inventory unit with ID ${unitId} does not exist.`);
+    }
+
+    const currentUnit = snap.data() as BloodInventoryUnit;
+
+    if (!isValidInventoryTransition(currentUnit.status, newStatus)) {
+      throw new BloodBankValidationError(
+        `Illegal status transition: cannot change unit status from '${currentUnit.status}' to '${newStatus}'.`
+      );
+    }
+
+    const { auditRef, fullEvent } = createAuditRefAndEvent(cId, {
+      actorUid: actor.uid,
+      actorEmail: actor.email,
+      actorRole: 'blood_bank',
+      action: 'INVENTORY_STATUS_UPDATED',
+      entity: 'inventory',
+      entityId: unitId,
+      statusTransition: {
+        from: currentUnit.status,
+        to: newStatus,
+      },
+      details: { reason },
+    });
+
+    tx.update(unitRef, {
+      status: newStatus,
+      statusReason: reason || null,
+      updatedAt: now,
+    });
+
+    tx.set(auditRef, fullEvent);
   });
 }
 
@@ -275,6 +327,9 @@ export async function fetchRequests(centerId = DEFAULT_BLOOD_BANK_CENTER_ID): Pr
   return snap.docs.map((d) => d.data() as BloodRequest);
 }
 
+/**
+ * Atomically submits a blood request and records its audit log
+ */
 export async function createBloodRequest(
   payload: Omit<BloodRequest, 'id' | 'centerId' | 'status' | 'createdAt' | 'updatedAt'>,
   actor: { uid: string; email?: string }
@@ -295,9 +350,7 @@ export async function createBloodRequest(
   };
 
   const reqRef = doc(db, 'bloodBank', centerId, 'requests', requestId);
-  await setDoc(reqRef, newRequest);
-
-  await appendAuditLog(centerId, {
+  const { auditRef, fullEvent } = createAuditRefAndEvent(centerId, {
     actorUid: actor.uid,
     actorEmail: actor.email,
     actorRole: 'blood_bank',
@@ -312,9 +365,17 @@ export async function createBloodRequest(
     },
   });
 
+  const batch = writeBatch(db);
+  batch.set(reqRef, newRequest);
+  batch.set(auditRef, fullEvent);
+  await batch.commit();
+
   return newRequest;
 }
 
+/**
+ * Atomically updates blood request status and appends audit log
+ */
 export async function updateRequestStatus(
   requestId: string,
   newStatus: RequestStatus,
@@ -324,34 +385,38 @@ export async function updateRequestStatus(
 ): Promise<void> {
   const cId = getCenterId(centerId);
   const reqRef = doc(db, 'bloodBank', cId, 'requests', requestId);
-  const snap = await getDoc(reqRef);
-
-  if (!snap.exists()) {
-    throw new BloodBankValidationError(`Blood request with ID ${requestId} does not exist.`);
-  }
-
-  const currentReq = snap.data() as BloodRequest;
   const now = new Date().toISOString();
 
-  await updateDoc(reqRef, {
-    status: newStatus,
-    reviewerStaffUid: actor.uid,
-    decisionNotes: decisionNotes || null,
-    updatedAt: now,
-  });
+  await runTransaction(db, async (tx) => {
+    const snap = await tx.get(reqRef);
+    if (!snap.exists()) {
+      throw new BloodBankValidationError(`Blood request with ID ${requestId} does not exist.`);
+    }
 
-  await appendAuditLog(cId, {
-    actorUid: actor.uid,
-    actorEmail: actor.email,
-    actorRole: 'blood_bank',
-    action: 'REQUEST_STATUS_UPDATED',
-    entity: 'request',
-    entityId: requestId,
-    statusTransition: {
-      from: currentReq.status,
-      to: newStatus,
-    },
-    details: { decisionNotes },
+    const currentReq = snap.data() as BloodRequest;
+
+    const { auditRef, fullEvent } = createAuditRefAndEvent(cId, {
+      actorUid: actor.uid,
+      actorEmail: actor.email,
+      actorRole: 'blood_bank',
+      action: 'REQUEST_STATUS_UPDATED',
+      entity: 'request',
+      entityId: requestId,
+      statusTransition: {
+        from: currentReq.status,
+        to: newStatus,
+      },
+      details: { decisionNotes },
+    });
+
+    tx.update(reqRef, {
+      status: newStatus,
+      reviewerStaffUid: actor.uid,
+      decisionNotes: decisionNotes || null,
+      updatedAt: now,
+    });
+
+    tx.set(auditRef, fullEvent);
   });
 }
 
@@ -366,6 +431,10 @@ export async function fetchDistributions(centerId = DEFAULT_BLOOD_BANK_CENTER_ID
   return snap.docs.map((d) => d.data() as BloodDistribution);
 }
 
+/**
+ * Atomically validates inventory units, creates distribution record,
+ * transitions inventory units, updates request fulfillment status, and appends audit log.
+ */
 export async function createDistribution(
   payload: Omit<BloodDistribution, 'id' | 'centerId' | 'createdAt' | 'updatedAt'>,
   actor: { uid: string; email?: string }
@@ -385,22 +454,8 @@ export async function createDistribution(
   };
 
   const distRef = doc(db, 'bloodBank', centerId, 'issues', issueId);
-  await setDoc(distRef, newDistribution);
-
-  // Mark all issued units as 'reserved' or 'transfused' according to dispatch
-  for (const unitId of payload.issuedUnitIds) {
-    const unitRef = doc(db, 'bloodBank', centerId, 'inventory', unitId);
-    const unitSnap = await getDoc(unitRef);
-    if (unitSnap.exists()) {
-      await updateDoc(unitRef, {
-        status: payload.dispatchStatus === 'delivered' ? 'transfused' : 'reserved',
-        reservedForRequestId: payload.requestId,
-        updatedAt: now,
-      });
-    }
-  }
-
-  await appendAuditLog(centerId, {
+  const reqRef = doc(db, 'bloodBank', centerId, 'requests', payload.requestId);
+  const { auditRef, fullEvent } = createAuditRefAndEvent(centerId, {
     actorUid: actor.uid,
     actorEmail: actor.email,
     actorRole: 'blood_bank',
@@ -412,6 +467,58 @@ export async function createDistribution(
       destination: newDistribution.destinationOrganization,
       unitsCount: newDistribution.issuedUnitIds.length,
     },
+  });
+
+  await runTransaction(db, async (tx) => {
+    // 1. Transactional reads: check request and all units first
+    const reqSnap = await tx.get(reqRef);
+    if (!reqSnap.exists()) {
+      throw new BloodBankValidationError(`Associated blood request ${payload.requestId} does not exist.`);
+    }
+
+    const unitRefs = payload.issuedUnitIds.map((uId) => ({
+      ref: doc(db, 'bloodBank', centerId, 'inventory', uId),
+      id: uId,
+    }));
+
+    const unitSnaps = await Promise.all(unitRefs.map((u) => tx.get(u.ref)));
+
+    for (const uSnap of unitSnaps) {
+      if (!uSnap.exists()) {
+        throw new BloodBankValidationError(`Selected inventory unit ${uSnap.id} does not exist.`);
+      }
+      const unitData = uSnap.data() as BloodInventoryUnit;
+      if (unitData.status !== 'available' && unitData.status !== 'reserved') {
+        throw new BloodBankValidationError(
+          `Unit ${uSnap.id} is currently in '${unitData.status}' status and cannot be issued.`
+        );
+      }
+    }
+
+    // 2. Transactional writes
+    tx.set(distRef, newDistribution);
+
+    for (const u of unitRefs) {
+      tx.update(u.ref, {
+        status: payload.dispatchStatus === 'delivered' ? 'transfused' : 'reserved',
+        reservedForRequestId: payload.requestId,
+        updatedAt: now,
+      });
+    }
+
+    // Update request status based on fulfillment
+    const reqData = reqSnap.data() as BloodRequest;
+    const previouslyFulfilled = reqData.fulfilledUnitIds || [];
+    const updatedFulfilled = Array.from(new Set([...previouslyFulfilled, ...payload.issuedUnitIds]));
+    const isFullyFulfilled = updatedFulfilled.length >= reqData.quantityUnits;
+
+    tx.update(reqRef, {
+      status: isFullyFulfilled ? 'fulfilled' : 'partially_fulfilled',
+      fulfilledUnitIds: updatedFulfilled,
+      updatedAt: now,
+    });
+
+    tx.set(auditRef, fullEvent);
   });
 
   return newDistribution;
@@ -432,7 +539,7 @@ export async function fetchAuditLogs(
 }
 
 // =============================================================================
-// Aggregated Metrics (Exported from validation)
+// Aggregated Metrics (Exported from pure validation module)
 // =============================================================================
 
 export { calculateMetrics } from './validation';

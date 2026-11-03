@@ -1,6 +1,15 @@
 /**
  * MEDICORE-AI — Isolated Blood Bank Constants & Guardrails
- * Domain reference constants for Phase 4A
+ * Domain reference constants for Phase 4A / 4A.1 Hardening
+ *
+ * IMPORTANT CLINICAL BOUNDARY NOTICE:
+ * The shelf-life values, storage temperatures, and draw volumes defined in this file
+ * are OPERATIONAL SOFTWARE BASELINES intended for UI assistance and form pre-population.
+ * They DO NOT constitute medical directives, approved clinical protocols, or regulatory policy.
+ *
+ * Authorized blood bank medical directors and laboratory quality managers must review
+ * and establish clinical criteria according to local regulatory standards and specific
+ * preservative/anticoagulant solutions in use.
  */
 
 import { BloodGroup, BloodComponentType, RequestUrgency, DonorEligibilityStatus, InventoryUnitStatus } from './types';
@@ -11,47 +20,57 @@ export const BLOOD_GROUPS: readonly BloodGroup[] = [
   'A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-'
 ] as const;
 
+/**
+ * Baseline Reference Guidelines for Blood Components
+ * (Advisory only — Staff must approve expiry date and storage conditions)
+ */
 export const BLOOD_COMPONENTS: readonly {
   type: BloodComponentType;
   label: string;
-  defaultShelfLifeDays: number;
-  recommendedStorageTemp: string;
-  standardVolumeMl: number;
+  advisoryShelfLifeDays: number;
+  advisoryStorageTemp: string;
+  advisoryStandardVolumeMl: number;
+  isOperationalGuidelineOnly: boolean;
 }[] = [
   {
     type: 'whole_blood',
     label: 'Whole Blood (WB)',
-    defaultShelfLifeDays: 35,
-    recommendedStorageTemp: '+2°C to +6°C',
-    standardVolumeMl: 450,
+    advisoryShelfLifeDays: 35,
+    advisoryStorageTemp: '+2°C to +6°C',
+    advisoryStandardVolumeMl: 450,
+    isOperationalGuidelineOnly: true,
   },
   {
     type: 'red_blood_cells',
     label: 'Packed Red Blood Cells (PRBC)',
-    defaultShelfLifeDays: 42,
-    recommendedStorageTemp: '+2°C to +6°C',
-    standardVolumeMl: 300,
+    advisoryShelfLifeDays: 42,
+    advisoryStorageTemp: '+2°C to +6°C',
+    advisoryStandardVolumeMl: 300,
+    isOperationalGuidelineOnly: true,
   },
   {
     type: 'platelets',
     label: 'Platelet Concentrate',
-    defaultShelfLifeDays: 5,
-    recommendedStorageTemp: '+20°C to +24°C (agitation)',
-    standardVolumeMl: 250,
+    advisoryShelfLifeDays: 5,
+    advisoryStorageTemp: '+20°C to +24°C (agitation)',
+    advisoryStandardVolumeMl: 250,
+    isOperationalGuidelineOnly: true,
   },
   {
     type: 'fresh_frozen_plasma',
     label: 'Fresh Frozen Plasma (FFP)',
-    defaultShelfLifeDays: 365,
-    recommendedStorageTemp: '≤ -18°C',
-    standardVolumeMl: 250,
+    advisoryShelfLifeDays: 365,
+    advisoryStorageTemp: '≤ -18°C',
+    advisoryStandardVolumeMl: 250,
+    isOperationalGuidelineOnly: true,
   },
   {
     type: 'cryoprecipitate',
     label: 'Cryoprecipitate',
-    defaultShelfLifeDays: 365,
-    recommendedStorageTemp: '≤ -18°C',
-    standardVolumeMl: 15,
+    advisoryShelfLifeDays: 365,
+    advisoryStorageTemp: '≤ -18°C',
+    advisoryStandardVolumeMl: 15,
+    isOperationalGuidelineOnly: true,
   },
 ] as const;
 

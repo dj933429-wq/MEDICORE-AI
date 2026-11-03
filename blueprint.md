@@ -288,7 +288,28 @@ Medicore-AI is an AI-powered healthcare management platform built on Next.js 16 
 
 ---
 
-### In Progress: Phase 4A — Isolated Blood Bank Development
+### Completed: Phase 4A — Isolated Blood Bank Foundation
+- **Status:** Complete & Verified on branch eature/blood-bank-management (Commit: 5a6ead0eef6745463f8f8fd00bc19ee0c2248c3e).
+- **Core Deliverables:**
+  - Strict TypeScript models and constants in src/lib/blood-bank/types.ts and constants.ts.
+  - Comprehensive runtime validation and transition matrix in alidation.ts.
+  - Namespaced Firestore operations (loodBank/{centerId}/...) in irestore-service.ts.
+  - Dedicated isolated dashboard with 7 modules and honest empty states in src/app/dashboard/blood-bank/.
+  - Draft rules fragment in docs/phase-4/blood-bank-firestore-rules.fragment.
+  - 103 new passing tests (63 validation + 40 emulator security), 0 regressions on 165 existing tests (268/268 total passing).
+  - Next.js 16 production build clean across all 15 routes.
+
+---
+
+### In Progress: Phase 4A.1 — Hardening Review
+- **Status:** In Progress (Worktree ../MEDICORE-AI-blood-bank, branch eature/blood-bank-management).
+- **Scope & Hardening Objectives:**
+  1. **Git Audit:** Reconcile commit SHA documentation to published head 5a6ead0eef6745463f8f8fd00bc19ee0c2248c3e.
+  2. **Atomic Writes:** Refactor irestore-service.ts to utilize Firestore transactions (
+unTransaction) and atomic write batches (writeBatch), guaranteeing that operational writes, donor counts, inventory unit updates, and audit trail events are all atomic and crash-resistant.
+  3. **Rules Hardening:** Strengthen docs/phase-4/blood-bank-firestore-rules.fragment with strict .hasOnly([...]) field lists, type validations, document/center ID invariants, field immutability, in-rules inventory state transition enforcement, and relationship existence checks.
+  4. **Clinical Baseline & Data Minimization:** Refactor constants.ts, alidation.ts, 	ypes.ts, and UI components so operational parameters are explicitly marked as guidelines rather than clinical policy. Implement data minimization via donorReferenceId to avoid mandatory collection of sensitive government IDs, and require manual staff approval for unit expiry dates.
+  5. **Verification & Testing:** Expand security rules test suite and rerun all 268+ tests, lint, TypeScript, and production build.
 - **Status:** In Progress (Strict Isolation Mode in worktree ../MEDICORE-AI-blood-bank on branch eature/blood-bank-management).
 - **Baseline Commit:** ee00a5b5701a2bb1abf77a958cb3c488c887657 (Phase 3 Menstrual Health Foundation).
 - **Core Architecture & Isolation Plan:**

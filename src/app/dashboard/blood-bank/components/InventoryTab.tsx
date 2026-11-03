@@ -79,7 +79,7 @@ export default function InventoryTab({
 
   const handleComponentChange = (comp: BloodComponentType) => {
     const compSpec = BLOOD_COMPONENTS.find((c) => c.type === comp);
-    const shelfLife = compSpec ? compSpec.defaultShelfLifeDays : 35;
+    const shelfLife = compSpec ? compSpec.advisoryShelfLifeDays : 35;
     const colDate = formData.collectionDate || new Date().toISOString().split('T')[0];
     const exp = new Date(colDate);
     exp.setDate(exp.getDate() + shelfLife);
@@ -87,7 +87,7 @@ export default function InventoryTab({
     setFormData({
       ...formData,
       componentType: comp,
-      volumeMl: compSpec ? compSpec.standardVolumeMl : 450,
+      volumeMl: compSpec ? compSpec.advisoryStandardVolumeMl : 450,
       expiryDate: exp.toISOString().split('T')[0],
     });
   };
@@ -97,7 +97,7 @@ export default function InventoryTab({
     if (don) {
       const colDate = don.donationDate.split('T')[0];
       const compSpec = BLOOD_COMPONENTS.find((c) => c.type === formData.componentType);
-      const shelfLife = compSpec ? compSpec.defaultShelfLifeDays : 35;
+      const shelfLife = compSpec ? compSpec.advisoryShelfLifeDays : 35;
       const exp = new Date(colDate);
       exp.setDate(exp.getDate() + shelfLife);
 
@@ -477,6 +477,7 @@ export default function InventoryTab({
                     onChange={(e) => setFormData({ ...formData, expiryDate: e.target.value })}
                     className="w-full px-3 py-2 text-xs border border-slate-200 rounded-lg focus:outline-none"
                   />
+                  <span className="text-[10px] text-slate-400">Advisory prefill: Staff must verify and approve expiry</span>
                 </div>
               </div>
 
@@ -593,3 +594,4 @@ export default function InventoryTab({
     </div>
   );
 }
+

@@ -1,6 +1,7 @@
 /**
  * MEDICORE-AI — Isolated Blood Bank Validation & Business Rules
  * Runtime validation for domain entities, status transitions, and safety constraints.
+ * (Phase 4A.1 Hardened)
  */
 
 import {
@@ -78,26 +79,35 @@ export function calculateAge(dobStr: string): number {
 
 /**
  * Validate Donor Registration / Update Payload
+ * Enforces data minimization: requires `donorReferenceId`, `nationalIdOrPassport` is optional.
  */
 export function validateDonorPayload(data: Partial<BloodDonor>): void {
   const errors: Record<string, string> = {};
+
+  if (!data.donorReferenceId || typeof data.donorReferenceId !== 'string' || data.donorReferenceId.trim().length < 3) {
+    errors.donorReferenceId = 'Donor reference ID is required (minimum 3 characters).';
+  }
 
   if (!data.fullName || typeof data.fullName !== 'string' || data.fullName.trim().length < 2) {
     errors.fullName = 'Full name is required (minimum 2 characters).';
   }
 
-  if (!data.nationalIdOrPassport || typeof data.nationalIdOrPassport !== 'string' || data.nationalIdOrPassport.trim().length < 3) {
-    errors.nationalIdOrPassport = 'National ID, Passport, or Donor Identification is required.';
+  // National ID / Passport is strictly optional (data minimization)
+  if (data.nationalIdOrPassport !== undefined && data.nationalIdOrPassport !== null && data.nationalIdOrPassport !== '') {
+    if (typeof data.nationalIdOrPassport !== 'string' || data.nationalIdOrPassport.trim().length < 3) {
+      errors.nationalIdOrPassport = 'If provided, identification reference must be at least 3 characters.';
+    }
   }
 
   if (!data.dateOfBirth || !isValidDateString(data.dateOfBirth)) {
     errors.dateOfBirth = 'Date of birth must be a valid date in YYYY-MM-DD format.';
   } else {
     const age = calculateAge(data.dateOfBirth);
-    if (age < 18) {
-      errors.dateOfBirth = 'Donor must be at least 18 years old.';
-    } else if (age > 75) {
-      errors.dateOfBirth = 'Donor age exceeds standard maximum eligibility limit (75 years).';
+    // Clerical sanity check to catch data entry errors (not an automated clinical policy)
+    if (age < 16) {
+      errors.dateOfBirth = 'Invalid date of birth: recorded age is below minimum sanity threshold (16 years).';
+    } else if (age > 100) {
+      errors.dateOfBirth = 'Invalid date of birth: recorded age exceeds maximum sanity threshold (100 years).';
     }
   }
 
@@ -157,8 +167,9 @@ export function validateDonationPayload(data: Partial<BloodDonation>): void {
     errors.bloodGroup = 'Valid blood group is required.';
   }
 
-  if (typeof data.volumeMl !== 'number' || data.volumeMl < 100 || data.volumeMl > 600) {
-    errors.volumeMl = 'Collection volume must be between 100 ml and 600 ml.';
+  // Broad operational recording range to accommodate whole blood and component draws
+  if (typeof data.volumeMl !== 'number' || data.volumeMl < 50 || data.volumeMl > 700) {
+    errors.volumeMl = 'Collection volume must be between 50 ml and 700 ml.';
   }
 
   const validCollectionStatuses: DonationCollectionStatus[] = [
@@ -239,9 +250,9 @@ export function validateInventoryUnitPayload(data: Partial<BloodInventoryUnit>):
   }
 
   if (!data.expiryDate || !isValidDateString(data.expiryDate)) {
-    errors.expiryDate = 'Valid expiry date (YYYY-MM-DD) is required.';
+    errors.expiryDate = 'Valid approved expiry date (YYYY-MM-DD) is required.';
   } else if (data.collectionDate && data.expiryDate < data.collectionDate) {
-    errors.expiryDate = 'Expiry date cannot precede collection date.';
+    errors.expiryDate = 'Approved expiry date cannot precede collection date.';
   }
 
   if (typeof data.volumeMl !== 'number' || data.volumeMl <= 0) {

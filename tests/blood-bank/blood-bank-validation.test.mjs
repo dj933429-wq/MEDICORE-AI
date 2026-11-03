@@ -18,7 +18,6 @@ import {
   validateBloodRequestPayload,
   validateDistributionPayload,
   calculateMetrics,
-  BloodBankValidationError,
 } from '../../src/lib/blood-bank/validation.ts';
 
 import {
@@ -81,6 +80,7 @@ assert(calculateAge('2000-01-01') >= 26, 'Calculates donor age correctly');
 // 3. Donor Payload Validation
 console.log('\n--- Suite 3: Donor Validation ---');
 const validDonor = {
+  donorReferenceId: 'DON-2026-0001',
   fullName: 'Jane Smith',
   nationalIdOrPassport: 'NAT-998234',
   dateOfBirth: '1995-06-15',
@@ -95,10 +95,10 @@ const validDonor = {
   verifiedByStaffUid: 'staff_123',
 };
 
+assertThrows(() => validateDonorPayload({ ...validDonor, donorReferenceId: '' }), 'Rejects missing donorReferenceId');
 assertThrows(() => validateDonorPayload({ ...validDonor, fullName: 'J' }), 'Rejects single-character donor name');
-assertThrows(() => validateDonorPayload({ ...validDonor, nationalIdOrPassport: '' }), 'Rejects missing national ID');
-assertThrows(() => validateDonorPayload({ ...validDonor, dateOfBirth: '2020-01-01' }), 'Rejects minor donor under 18 years');
-assertThrows(() => validateDonorPayload({ ...validDonor, dateOfBirth: '1940-01-01' }), 'Rejects donor over 75 years');
+assertThrows(() => validateDonorPayload({ ...validDonor, dateOfBirth: '2020-01-01' }), 'Rejects minor donor under clerical sanity check');
+assertThrows(() => validateDonorPayload({ ...validDonor, dateOfBirth: '1910-01-01' }), 'Rejects donor over clerical sanity threshold');
 assertThrows(() => validateDonorPayload({ ...validDonor, bloodGroup: 'X+' }), 'Rejects invalid blood group');
 assertThrows(() => validateDonorPayload({ ...validDonor, contact: { phone: '123', email: 'notanemail' } }), 'Rejects invalid email format');
 assertThrows(() => validateDonorPayload({ ...validDonor, eligibilityStatus: 'temporarily_deferred', deferralUntil: undefined }), 'Requires deferralUntil for temporary deferral');
@@ -107,6 +107,10 @@ assertThrows(() => validateDonorPayload({ ...validDonor, verifiedByStaffUid: '' 
 // Valid donor passes
 validateDonorPayload(validDonor);
 assert(true, 'Accepts valid donor registration payload');
+
+// Data minimization: accepts donor without nationalIdOrPassport
+validateDonorPayload({ ...validDonor, nationalIdOrPassport: undefined });
+assert(true, 'Data minimization: accepts donor without nationalIdOrPassport');
 
 // 4. Donation Payload Validation
 console.log('\n--- Suite 4: Donation Validation ---');
@@ -121,8 +125,8 @@ const validDonation = {
   collectionStaffUid: 'staff_123',
 };
 
-assertThrows(() => validateDonationPayload({ ...validDonation, volumeMl: 50 }), 'Rejects volume below minimum 100ml');
-assertThrows(() => validateDonationPayload({ ...validDonation, volumeMl: 800 }), 'Rejects volume above maximum 600ml');
+assertThrows(() => validateDonationPayload({ ...validDonation, volumeMl: 20 }), 'Rejects volume below minimum 50ml');
+assertThrows(() => validateDonationPayload({ ...validDonation, volumeMl: 900 }), 'Rejects volume above maximum 700ml');
 assertThrows(() => validateDonationPayload({ ...validDonation, collectionStatus: 'unknown' }), 'Rejects invalid collection status');
 assertThrows(() => validateDonationPayload({ ...validDonation, screeningStatus: 'safe' }), 'Rejects invalid screening status enum');
 assertThrows(() => validateDonationPayload({ ...validDonation, collectionStaffUid: '' }), 'Requires collection staff UID');

@@ -29,6 +29,7 @@ export default function DonorsTab({
 
   // Form State
   const [formData, setFormData] = useState({
+    donorReferenceId: `DON-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`,
     fullName: '',
     nationalIdOrPassport: '',
     dateOfBirth: '',
@@ -45,7 +46,8 @@ export default function DonorsTab({
   const filteredDonors = donors.filter((donor) => {
     const matchesSearch =
       donor.fullName.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      donor.nationalIdOrPassport.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      donor.donorReferenceId.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      (donor.nationalIdOrPassport && donor.nationalIdOrPassport.toLowerCase().includes(searchTerm.toLowerCase())) ||
       donor.contact.email.toLowerCase().includes(searchTerm.toLowerCase());
     const matchesGroup = selectedBloodGroup === 'all' || donor.bloodGroup === selectedBloodGroup;
     const matchesEligibility = selectedEligibility === 'all' || donor.eligibilityStatus === selectedEligibility;
@@ -58,8 +60,9 @@ export default function DonorsTab({
     setFormError(null);
     try {
       await onSubmitRegister({
+        donorReferenceId: formData.donorReferenceId.trim(),
         fullName: formData.fullName.trim(),
-        nationalIdOrPassport: formData.nationalIdOrPassport.trim(),
+        nationalIdOrPassport: formData.nationalIdOrPassport.trim() || undefined,
         dateOfBirth: formData.dateOfBirth,
         gender: formData.gender,
         bloodGroup: formData.bloodGroup,
@@ -75,6 +78,7 @@ export default function DonorsTab({
       });
       // Reset form
       setFormData({
+        donorReferenceId: `DON-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`,
         fullName: '',
         nationalIdOrPassport: '',
         dateOfBirth: '',
@@ -172,7 +176,8 @@ export default function DonorsTab({
               <thead>
                 <tr className="bg-slate-50 text-slate-600 font-semibold border-b border-slate-100">
                   <th className="py-3 px-4">Donor Name</th>
-                  <th className="py-3 px-4">Identification</th>
+                  <th className="py-3 px-4">Donor Ref ID</th>
+                  <th className="py-3 px-4">Facility ID (Masked)</th>
                   <th className="py-3 px-4">Blood Group</th>
                   <th className="py-3 px-4">DOB / Gender</th>
                   <th className="py-3 px-4">Contact</th>
@@ -189,7 +194,10 @@ export default function DonorsTab({
                   return (
                     <tr key={donor.id} className="hover:bg-slate-50/60 transition-colors">
                       <td className="py-3.5 px-4 font-semibold text-slate-900">{donor.fullName}</td>
-                      <td className="py-3.5 px-4 font-mono text-slate-600">{donor.nationalIdOrPassport}</td>
+                      <td className="py-3.5 px-4 font-mono font-bold text-slate-800">{donor.donorReferenceId}</td>
+                      <td className="py-3.5 px-4 font-mono text-slate-500">
+                        {donor.nationalIdOrPassport || <span className="text-slate-400 italic">De-identified</span>}
+                      </td>
                       <td className="py-3.5 px-4">
                         <span className="inline-block px-2.5 py-0.5 rounded-full text-xs font-bold bg-rose-100 text-rose-700 border border-rose-200">
                           {donor.bloodGroup}
@@ -255,26 +263,39 @@ export default function DonorsTab({
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">National ID / Passport *</label>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">Donor Reference ID *</label>
                   <input
                     type="text"
                     required
-                    placeholder="e.g. ID-8941249"
+                    placeholder="e.g. DON-2026-0001"
+                    value={formData.donorReferenceId}
+                    onChange={(e) => setFormData({ ...formData, donorReferenceId: e.target.value })}
+                    className="w-full px-3 py-2 text-xs border border-slate-200 rounded-lg focus:ring-2 focus:ring-rose-500 font-mono focus:outline-none"
+                  />
+                  <span className="text-[10px] text-slate-400">Minimized facility-scoped identifier</span>
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">National ID / Passport (Optional)</label>
+                  <input
+                    type="text"
+                    placeholder="Masked facility ID (optional)"
                     value={formData.nationalIdOrPassport}
                     onChange={(e) => setFormData({ ...formData, nationalIdOrPassport: e.target.value })}
                     className="w-full px-3 py-2 text-xs border border-slate-200 rounded-lg focus:ring-2 focus:ring-rose-500 focus:outline-none"
                   />
+                  <span className="text-[10px] text-slate-400">Data minimized: not mandatory</span>
                 </div>
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">Date of Birth *</label>
-                  <input
-                    type="date"
-                    required
-                    value={formData.dateOfBirth}
-                    onChange={(e) => setFormData({ ...formData, dateOfBirth: e.target.value })}
-                    className="w-full px-3 py-2 text-xs border border-slate-200 rounded-lg focus:ring-2 focus:ring-rose-500 focus:outline-none"
-                  />
-                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">Date of Birth *</label>
+                <input
+                  type="date"
+                  required
+                  value={formData.dateOfBirth}
+                  onChange={(e) => setFormData({ ...formData, dateOfBirth: e.target.value })}
+                  className="w-full px-3 py-2 text-xs border border-slate-200 rounded-lg focus:ring-2 focus:ring-rose-500 focus:outline-none"
+                />
               </div>
 
               <div className="grid grid-cols-2 gap-3">
@@ -408,3 +429,4 @@ export default function DonorsTab({
     </div>
   );
 }
+

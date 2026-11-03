@@ -62,3 +62,4 @@ export default function AccessDenied({ userRole, userEmail }: AccessDeniedProps)
     </div>
   );
 }
+

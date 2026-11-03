@@ -1,5 +1,5 @@
 // =============================================================================
-// MEDICORE-AI — Phase 4A Proposed Firestore Security Rules Fragment
+// MEDICORE-AI — Phase 4A.1 Hardened Firestore Security Rules Fragment
 // FILE: docs/phase-4/blood-bank-firestore-rules.fragment
 //
 // NOTICE: THIS FILE IS A DRAFT PROPOSAL FOR FUTURE INTEGRATION.
@@ -21,25 +21,49 @@
     // 8. Isolated Blood Bank Subsystem (Namespace: bloodBank/{centerId}/...)
     // =========================================================================
     match /bloodBank/{centerId} {
-      // Center metadata document (if present): read-only for blood bank staff
+      // Helper function to enforce legal inventory state transition matrix in rules
+      function isValidInventoryStateTransition(fromStatus, toStatus) {
+        return fromStatus == toStatus ||
+          (fromStatus == 'quarantine' && toStatus in ['available', 'discarded', 'expired']) ||
+          (fromStatus == 'available' && toStatus in ['reserved', 'quarantine', 'expired', 'discarded']) ||
+          (fromStatus == 'reserved' && toStatus in ['transfused', 'available', 'quarantine', 'expired', 'discarded']) ||
+          (fromStatus == 'expired' && toStatus in ['discarded']);
+      }
+
+      // Center metadata document: read-only for authenticated blood bank staff
       allow read: if isAuthenticated() && isBloodBank();
       allow write: if false; // Center documents provisioned via Admin SDK only
 
       // -----------------------------------------------------------------------
       // 8.1 Donors Registry
       // Confidential donor identity, contact, eligibility, and screening status.
-      // Strictly restricted to authorized blood bank staff.
-      // Other roles (patient, doctor, pharmacist, admin) DENIED.
+      // Data minimization: uses donorReferenceId; nationalIdOrPassport is optional.
       // -----------------------------------------------------------------------
       match /donors/{donorId} {
         allow read: if isAuthenticated() && isBloodBank();
         
         allow create: if isAuthenticated() && isBloodBank()
+          && request.resource.data.id == donorId
+          && request.resource.data.centerId == centerId
           && request.resource.data.keys().hasAll([
-            'id', 'centerId', 'fullName', 'nationalIdOrPassport', 'dateOfBirth',
+            'id', 'centerId', 'donorReferenceId', 'fullName', 'dateOfBirth',
             'gender', 'bloodGroup', 'contact', 'eligibilityStatus', 'donationCount',
             'verifiedByStaffUid', 'createdAt', 'updatedAt'
           ])
+          && request.resource.data.keys().hasOnly([
+            'id', 'centerId', 'donorReferenceId', 'fullName', 'nationalIdOrPassport',
+            'dateOfBirth', 'gender', 'bloodGroup', 'contact', 'eligibilityStatus',
+            'deferralReason', 'deferralUntil', 'lastDonationDate', 'donationCount',
+            'verifiedByStaffUid', 'createdAt', 'updatedAt'
+          ])
+          && request.resource.data.donorReferenceId is string
+          && request.resource.data.donorReferenceId.size() >= 3
+          && request.resource.data.fullName is string
+          && request.resource.data.fullName.size() >= 2
+          && request.resource.data.contact is map
+          && request.resource.data.donationCount is int
+          && request.resource.data.donationCount == 0
+          && request.resource.data.gender in ['male', 'female', 'other']
           && request.resource.data.bloodGroup in ['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-']
           && request.resource.data.eligibilityStatus in ['eligible', 'temporarily_deferred', 'permanently_deferred', 'pending_screening']
           && request.resource.data.verifiedByStaffUid == request.auth.uid;
@@ -47,11 +71,20 @@
         allow update: if isAuthenticated() && isBloodBank()
           && request.resource.data.id == resource.data.id
           && request.resource.data.centerId == resource.data.centerId
+          && request.resource.data.donorReferenceId == resource.data.donorReferenceId
+          && request.resource.data.dateOfBirth == resource.data.dateOfBirth
+          && request.resource.data.gender == resource.data.gender
+          && request.resource.data.bloodGroup == resource.data.bloodGroup
           && request.resource.data.createdAt == resource.data.createdAt
-          && request.resource.data.bloodGroup in ['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-']
+          && request.resource.data.keys().hasOnly([
+            'id', 'centerId', 'donorReferenceId', 'fullName', 'nationalIdOrPassport',
+            'dateOfBirth', 'gender', 'bloodGroup', 'contact', 'eligibilityStatus',
+            'deferralReason', 'deferralUntil', 'lastDonationDate', 'donationCount',
+            'verifiedByStaffUid', 'createdAt', 'updatedAt'
+          ])
           && request.resource.data.eligibilityStatus in ['eligible', 'temporarily_deferred', 'permanently_deferred', 'pending_screening'];
 
-        allow delete: if false; // Donors cannot be hard-deleted; status transitions to deferred
+        allow delete: if false; // Donors cannot be deleted; permanent regulatory traceability
       }
 
       // -----------------------------------------------------------------------
@@ -62,21 +95,42 @@
         allow read: if isAuthenticated() && isBloodBank();
 
         allow create: if isAuthenticated() && isBloodBank()
+          && request.resource.data.id == donationId
+          && request.resource.data.centerId == centerId
           && request.resource.data.keys().hasAll([
             'id', 'centerId', 'donorId', 'donorName', 'bloodGroup', 'donationDate',
             'volumeMl', 'collectionStatus', 'screeningStatus', 'collectionStaffUid',
             'createdAt', 'updatedAt'
           ])
+          && request.resource.data.keys().hasOnly([
+            'id', 'centerId', 'donorId', 'donorReferenceId', 'donorName', 'bloodGroup',
+            'donationDate', 'volumeMl', 'collectionStatus', 'screeningStatus',
+            'screeningStaffUid', 'screeningNotes', 'collectionStaffUid',
+            'adverseEventNotes', 'createdAt', 'updatedAt'
+          ])
+          && exists(/databases/$(database)/documents/bloodBank/$(centerId)/donors/$(request.resource.data.donorId))
           && request.resource.data.bloodGroup in ['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-']
           && request.resource.data.collectionStatus in ['completed', 'partial', 'adverse_reaction', 'cancelled']
           && request.resource.data.screeningStatus in ['pending', 'tested_passed', 'tested_failed', 'quarantined']
-          && request.resource.data.volumeMl >= 100 && request.resource.data.volumeMl <= 600
+          && request.resource.data.volumeMl is number
+          && request.resource.data.volumeMl >= 50 && request.resource.data.volumeMl <= 700
           && request.resource.data.collectionStaffUid == request.auth.uid;
 
         allow update: if isAuthenticated() && isBloodBank()
           && request.resource.data.id == resource.data.id
+          && request.resource.data.centerId == resource.data.centerId
           && request.resource.data.donorId == resource.data.donorId
+          && request.resource.data.bloodGroup == resource.data.bloodGroup
+          && request.resource.data.volumeMl == resource.data.volumeMl
+          && request.resource.data.donationDate == resource.data.donationDate
+          && request.resource.data.collectionStaffUid == resource.data.collectionStaffUid
           && request.resource.data.createdAt == resource.data.createdAt
+          && request.resource.data.keys().hasOnly([
+            'id', 'centerId', 'donorId', 'donorReferenceId', 'donorName', 'bloodGroup',
+            'donationDate', 'volumeMl', 'collectionStatus', 'screeningStatus',
+            'screeningStaffUid', 'screeningNotes', 'collectionStaffUid',
+            'adverseEventNotes', 'createdAt', 'updatedAt'
+          ])
           && request.resource.data.collectionStatus in ['completed', 'partial', 'adverse_reaction', 'cancelled']
           && request.resource.data.screeningStatus in ['pending', 'tested_passed', 'tested_failed', 'quarantined'];
 
@@ -91,24 +145,41 @@
         allow read: if isAuthenticated() && isBloodBank();
 
         allow create: if isAuthenticated() && isBloodBank()
+          && request.resource.data.id == unitId
+          && request.resource.data.centerId == centerId
           && request.resource.data.keys().hasAll([
             'id', 'centerId', 'donationId', 'donorId', 'bloodGroup', 'componentType',
             'collectionDate', 'expiryDate', 'volumeMl', 'storageLocation', 'status',
             'createdAt', 'updatedAt'
           ])
+          && request.resource.data.keys().hasOnly([
+            'id', 'centerId', 'donationId', 'donorId', 'bloodGroup', 'componentType',
+            'collectionDate', 'expiryDate', 'volumeMl', 'storageLocation', 'status',
+            'statusReason', 'reservedForRequestId', 'createdAt', 'updatedAt'
+          ])
+          && exists(/databases/$(database)/documents/bloodBank/$(centerId)/donations/$(request.resource.data.donationId))
           && request.resource.data.bloodGroup in ['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-']
           && request.resource.data.componentType in ['whole_blood', 'red_blood_cells', 'platelets', 'fresh_frozen_plasma', 'cryoprecipitate']
           && request.resource.data.status in ['available', 'reserved', 'quarantine', 'transfused', 'expired', 'discarded']
-          && request.resource.data.volumeMl > 0;
+          && request.resource.data.volumeMl is number
+          && request.resource.data.volumeMl > 0
+          && request.resource.data.expiryDate >= request.resource.data.collectionDate;
 
         allow update: if isAuthenticated() && isBloodBank()
           && request.resource.data.id == resource.data.id
+          && request.resource.data.centerId == resource.data.centerId
           && request.resource.data.donationId == resource.data.donationId
+          && request.resource.data.donorId == resource.data.donorId
           && request.resource.data.bloodGroup == resource.data.bloodGroup
           && request.resource.data.componentType == resource.data.componentType
           && request.resource.data.collectionDate == resource.data.collectionDate
           && request.resource.data.createdAt == resource.data.createdAt
-          && request.resource.data.status in ['available', 'reserved', 'quarantine', 'transfused', 'expired', 'discarded'];
+          && request.resource.data.keys().hasOnly([
+            'id', 'centerId', 'donationId', 'donorId', 'bloodGroup', 'componentType',
+            'collectionDate', 'expiryDate', 'volumeMl', 'storageLocation', 'status',
+            'statusReason', 'reservedForRequestId', 'createdAt', 'updatedAt'
+          ])
+          && isValidInventoryStateTransition(resource.data.status, request.resource.data.status);
 
         allow delete: if false; // Units transition to 'discarded' or 'transfused', never deleted
       }
@@ -121,23 +192,43 @@
         allow read: if isAuthenticated() && isBloodBank();
 
         allow create: if isAuthenticated() && isBloodBank()
+          && request.resource.data.id == requestId
+          && request.resource.data.centerId == centerId
           && request.resource.data.keys().hasAll([
             'id', 'centerId', 'requestingOrganization', 'bloodGroup', 'componentType',
             'quantityUnits', 'urgency', 'requiredByDate', 'status',
             'createdAt', 'updatedAt'
           ])
+          && request.resource.data.keys().hasOnly([
+            'id', 'centerId', 'requestingOrganization', 'departmentOrWard', 'patientIdentifier',
+            'bloodGroup', 'componentType', 'quantityUnits', 'urgency', 'requiredByDate',
+            'status', 'clinicalIndication', 'reviewerStaffUid', 'decisionNotes',
+            'fulfilledUnitIds', 'createdAt', 'updatedAt'
+          ])
           && request.resource.data.bloodGroup in ['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-']
           && request.resource.data.componentType in ['whole_blood', 'red_blood_cells', 'platelets', 'fresh_frozen_plasma', 'cryoprecipitate']
           && request.resource.data.urgency in ['routine', 'urgent', 'emergency_stat']
           && request.resource.data.status in ['submitted', 'under_review', 'approved', 'partially_fulfilled', 'fulfilled', 'rejected', 'cancelled']
+          && request.resource.data.quantityUnits is int
           && request.resource.data.quantityUnits >= 1 && request.resource.data.quantityUnits <= 50;
 
         allow update: if isAuthenticated() && isBloodBank()
           && request.resource.data.id == resource.data.id
+          && request.resource.data.centerId == resource.data.centerId
+          && request.resource.data.requestingOrganization == resource.data.requestingOrganization
+          && request.resource.data.bloodGroup == resource.data.bloodGroup
+          && request.resource.data.componentType == resource.data.componentType
+          && request.resource.data.quantityUnits == resource.data.quantityUnits
           && request.resource.data.createdAt == resource.data.createdAt
+          && request.resource.data.keys().hasOnly([
+            'id', 'centerId', 'requestingOrganization', 'departmentOrWard', 'patientIdentifier',
+            'bloodGroup', 'componentType', 'quantityUnits', 'urgency', 'requiredByDate',
+            'status', 'clinicalIndication', 'reviewerStaffUid', 'decisionNotes',
+            'fulfilledUnitIds', 'createdAt', 'updatedAt'
+          ])
           && request.resource.data.status in ['submitted', 'under_review', 'approved', 'partially_fulfilled', 'fulfilled', 'rejected', 'cancelled'];
 
-        allow delete: if false; // Cancelled requests retain status 'cancelled'
+        allow delete: if false; // Retain history in 'cancelled' or 'rejected' state
       }
 
       // -----------------------------------------------------------------------
@@ -148,20 +239,40 @@
         allow read: if isAuthenticated() && isBloodBank();
 
         allow create: if isAuthenticated() && isBloodBank()
+          && request.resource.data.id == issueId
+          && request.resource.data.centerId == centerId
           && request.resource.data.keys().hasAll([
             'id', 'centerId', 'requestId', 'destinationOrganization', 'issuedUnitIds',
             'authorizedStaffUid', 'dispatchStatus', 'temperatureLogVerified',
             'createdAt', 'updatedAt'
           ])
+          && request.resource.data.keys().hasOnly([
+            'id', 'centerId', 'requestId', 'destinationOrganization', 'departmentOrWard',
+            'issuedUnitIds', 'authorizedStaffUid', 'dispatchStatus', 'transportReference',
+            'temperatureLogVerified', 'dispatchedAt', 'deliveredAt', 'notes',
+            'createdAt', 'updatedAt'
+          ])
+          && exists(/databases/$(database)/documents/bloodBank/$(centerId)/requests/$(request.resource.data.requestId))
           && request.resource.data.dispatchStatus in ['prepared', 'dispatched', 'in_transit', 'delivered', 'cancelled']
           && request.resource.data.authorizedStaffUid == request.auth.uid
           && request.resource.data.temperatureLogVerified == true
+          && request.resource.data.issuedUnitIds is list
           && request.resource.data.issuedUnitIds.size() > 0;
 
         allow update: if isAuthenticated() && isBloodBank()
           && request.resource.data.id == resource.data.id
+          && request.resource.data.centerId == resource.data.centerId
           && request.resource.data.requestId == resource.data.requestId
+          && request.resource.data.destinationOrganization == resource.data.destinationOrganization
+          && request.resource.data.issuedUnitIds == resource.data.issuedUnitIds
+          && request.resource.data.authorizedStaffUid == resource.data.authorizedStaffUid
           && request.resource.data.createdAt == resource.data.createdAt
+          && request.resource.data.keys().hasOnly([
+            'id', 'centerId', 'requestId', 'destinationOrganization', 'departmentOrWard',
+            'issuedUnitIds', 'authorizedStaffUid', 'dispatchStatus', 'transportReference',
+            'temperatureLogVerified', 'dispatchedAt', 'deliveredAt', 'notes',
+            'createdAt', 'updatedAt'
+          ])
           && request.resource.data.dispatchStatus in ['prepared', 'dispatched', 'in_transit', 'delivered', 'cancelled'];
 
         allow delete: if false;
@@ -169,15 +280,21 @@
 
       // -----------------------------------------------------------------------
       // 8.6 Immutable Operational Audit Logs
-      // Append-only audit events. Mutations (update, delete) strictly denied.
+      // Append-only audit events. Modifications and deletions permanently denied.
       // -----------------------------------------------------------------------
       match /auditLogs/{auditId} {
         allow read: if isAuthenticated() && isBloodBank();
 
         allow create: if isAuthenticated() && isBloodBank()
+          && request.resource.data.id == auditId
+          && request.resource.data.centerId == centerId
           && request.resource.data.keys().hasAll([
             'id', 'centerId', 'actorUid', 'actorRole', 'action', 'entity',
             'entityId', 'timestamp'
+          ])
+          && request.resource.data.keys().hasOnly([
+            'id', 'centerId', 'actorUid', 'actorEmail', 'actorRole', 'action',
+            'entity', 'entityId', 'statusTransition', 'details', 'timestamp'
           ])
           && request.resource.data.actorUid == request.auth.uid
           && request.resource.data.actorRole == 'blood_bank'

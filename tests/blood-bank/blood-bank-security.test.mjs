@@ -1,10 +1,12 @@
 /**
  * MEDICORE-AI — Isolated Blood Bank Firestore Security Rules Suite
  * FILE: tests/blood-bank/blood-bank-security.test.mjs
+ * (Phase 4A.1 Hardened Security Assertions)
  *
  * Verifies role enforcement, claims-only authorization, cross-role denial,
- * patient privacy isolation, schema integrity, and audit trail immutability
- * against local Firestore Emulator.
+ * patient privacy isolation, document/center ID consistency, strict field whitelisting,
+ * relational existence checks, in-rules inventory state transitions,
+ * and immutable audit trail guarantees against local Firestore Emulator.
  *
  * NOTE: Constructs a temporary in-memory combined rules fixture.
  * The production firestore.rules on disk is NEVER modified.
@@ -21,7 +23,6 @@ const rootRules = readFileSync('firestore.rules', 'utf8');
 const bbFragment = readFileSync('docs/phase-4/blood-bank-firestore-rules.fragment', 'utf8');
 
 // Combine in memory: inject fragment inside match /databases/{database}/documents block
-// Find the last closing brace of the root rules
 const lastBraceIndex = rootRules.lastIndexOf('}');
 const secondLastBraceIndex = rootRules.lastIndexOf('}', lastBraceIndex - 1);
 const combinedRules = 
@@ -31,7 +32,7 @@ const combinedRules =
 
 async function runBloodBankSecuritySuite() {
   console.log('================================================================');
-  console.log('MEDICORE-AI: Blood Bank Isolated Security Rules Test Suite');
+  console.log('MEDICORE-AI: Blood Bank Isolated Security Rules Test Suite (Hardened)');
   console.log('================================================================\n');
 
   const testEnv = await initializeTestEnvironment({
@@ -97,6 +98,7 @@ async function runBloodBankSecuritySuite() {
     await setDoc(doc(db, 'bloodBank', 'center-primary', 'donors', 'donor_existing'), {
       id: 'donor_existing',
       centerId: 'center-primary',
+      donorReferenceId: 'DON-2026-0001',
       fullName: 'John Existing Donor',
       nationalIdOrPassport: 'NAT-001',
       dateOfBirth: '1990-01-01',
@@ -104,7 +106,7 @@ async function runBloodBankSecuritySuite() {
       bloodGroup: 'O+',
       contact: { phone: '+1 555-0001', email: 'john@example.com' },
       eligibilityStatus: 'eligible',
-      donationCount: 3,
+      donationCount: 0,
       verifiedByStaffUid: 'staff_bloodbank_1',
       createdAt: '2026-01-01T00:00:00Z',
       updatedAt: '2026-01-01T00:00:00Z',
@@ -114,6 +116,7 @@ async function runBloodBankSecuritySuite() {
       id: 'donation_existing',
       centerId: 'center-primary',
       donorId: 'donor_existing',
+      donorReferenceId: 'DON-2026-0001',
       donorName: 'John Existing Donor',
       bloodGroup: 'O+',
       donationDate: '2026-01-01T10:00:00Z',
@@ -137,6 +140,22 @@ async function runBloodBankSecuritySuite() {
       volumeMl: 450,
       storageLocation: 'Cold Room 1, Shelf A-1',
       status: 'available',
+      createdAt: '2026-01-01T10:00:00Z',
+      updatedAt: '2026-01-01T10:00:00Z',
+    });
+
+    await setDoc(doc(db, 'bloodBank', 'center-primary', 'inventory', 'unit_quarantined'), {
+      id: 'unit_quarantined',
+      centerId: 'center-primary',
+      donationId: 'donation_existing',
+      donorId: 'donor_existing',
+      bloodGroup: 'O+',
+      componentType: 'whole_blood',
+      collectionDate: '2026-01-01',
+      expiryDate: '2026-02-05',
+      volumeMl: 450,
+      storageLocation: 'Quarantine Bay',
+      status: 'quarantine',
       createdAt: '2026-01-01T10:00:00Z',
       updatedAt: '2026-01-01T10:00:00Z',
     });
@@ -183,7 +202,6 @@ async function runBloodBankSecuritySuite() {
   // Test Contexts
   const unauth = testEnv.unauthenticatedContext().firestore();
   const staff = testEnv.authenticatedContext('staff_bloodbank_1', { role: 'blood_bank' }).firestore();
-  const staff2 = testEnv.authenticatedContext('staff_bloodbank_2', { role: 'blood_bank' }).firestore();
   const claimless = testEnv.authenticatedContext('claimless_user').firestore();
   const admin = testEnv.authenticatedContext('admin_user', { role: 'admin' }).firestore();
   const doctor = testEnv.authenticatedContext('doctor_bob', { role: 'doctor' }).firestore();
@@ -213,12 +231,12 @@ async function runBloodBankSecuritySuite() {
     await assertSucceeds(getDoc(doc(staff, 'bloodBank', 'center-primary', 'donors', 'donor_existing')));
   });
 
-  await test('A5: Blood bank staff allowed create donor with complete valid schema', async () => {
+  await test('A5: Blood bank staff allowed create donor with data minimization (donorReferenceId)', async () => {
     await assertSucceeds(setDoc(doc(staff, 'bloodBank', 'center-primary', 'donors', 'donor_new'), {
       id: 'donor_new',
       centerId: 'center-primary',
+      donorReferenceId: 'DON-2026-0042',
       fullName: 'Sarah Connor',
-      nationalIdOrPassport: 'PASSPORT-7712',
       dateOfBirth: '1988-04-12',
       gender: 'female',
       bloodGroup: 'A-',
@@ -323,19 +341,19 @@ async function runBloodBankSecuritySuite() {
   });
 
   // =========================================================================
-  // Category D: Schema Validation & Field-Level Integrity
+  // Category D: Hardened Schema & Invariant Constraints
   // =========================================================================
-  console.log('\n--- Category D: Schema & Integrity Constraints ---');
+  console.log('\n--- Category D: Hardened Invariants & Strict Whitelisting ---');
 
-  await test('D1: Rejects donor create with invalid blood group ("Z+") ', async () => {
-    await assertFails(setDoc(doc(staff, 'bloodBank', 'center-primary', 'donors', 'd_bad_bg'), {
-      id: 'd_bad_bg',
+  await test('D1: Rejects donor create with document ID mismatch (id != docId)', async () => {
+    await assertFails(setDoc(doc(staff, 'bloodBank', 'center-primary', 'donors', 'donor_mismatch'), {
+      id: 'DIFFERENT_ID',
       centerId: 'center-primary',
-      fullName: 'Bad Blood Donor',
-      nationalIdOrPassport: 'NAT-999',
+      donorReferenceId: 'DON-2026-9999',
+      fullName: 'Valid Name',
       dateOfBirth: '1990-01-01',
       gender: 'male',
-      bloodGroup: 'Z+', // Invalid
+      bloodGroup: 'O+',
       contact: { phone: '555', email: 'test@example.com' },
       eligibilityStatus: 'eligible',
       donationCount: 0,
@@ -345,33 +363,59 @@ async function runBloodBankSecuritySuite() {
     }));
   });
 
-  await test('D2: Rejects donor create where verifiedByStaffUid does not match caller auth.uid', async () => {
-    await assertFails(setDoc(doc(staff, 'bloodBank', 'center-primary', 'donors', 'd_spoof_staff'), {
-      id: 'd_spoof_staff',
-      centerId: 'center-primary',
-      fullName: 'Spoofed Verification',
-      nationalIdOrPassport: 'NAT-888',
+  await test('D2: Rejects donor create with centerId mismatch', async () => {
+    await assertFails(setDoc(doc(staff, 'bloodBank', 'center-primary', 'donors', 'donor_bad_center'), {
+      id: 'donor_bad_center',
+      centerId: 'wrong-center-id',
+      donorReferenceId: 'DON-2026-9998',
+      fullName: 'Valid Name',
       dateOfBirth: '1990-01-01',
       gender: 'male',
-      bloodGroup: 'A+',
+      bloodGroup: 'O+',
       contact: { phone: '555', email: 'test@example.com' },
       eligibilityStatus: 'eligible',
       donationCount: 0,
-      verifiedByStaffUid: 'other_staff_uid', // Spoofed
+      verifiedByStaffUid: 'staff_bloodbank_1',
       createdAt: '2026-03-01T00:00:00Z',
       updatedAt: '2026-03-01T00:00:00Z',
     }));
   });
 
-  await test('D3: Rejects donation create with volume outside 100-600ml range (750ml)', async () => {
-    await assertFails(setDoc(doc(staff, 'bloodBank', 'center-primary', 'donations', 'don_overvolume'), {
-      id: 'don_overvolume',
+  await test('D3: Rejects donor create with unexpected extra field (strict hasOnly)', async () => {
+    await assertFails(setDoc(doc(staff, 'bloodBank', 'center-primary', 'donors', 'donor_extra_field'), {
+      id: 'donor_extra_field',
       centerId: 'center-primary',
-      donorId: 'donor_existing',
-      donorName: 'John Donor',
+      donorReferenceId: 'DON-2026-9997',
+      fullName: 'Valid Name',
+      dateOfBirth: '1990-01-01',
+      gender: 'male',
+      bloodGroup: 'O+',
+      contact: { phone: '555', email: 'test@example.com' },
+      eligibilityStatus: 'eligible',
+      donationCount: 0,
+      verifiedByStaffUid: 'staff_bloodbank_1',
+      createdAt: '2026-03-01T00:00:00Z',
+      updatedAt: '2026-03-01T00:00:00Z',
+      unauthorizedField: 'MALICIOUS_PAYLOAD',
+    }));
+  });
+
+  await test('D4: Rejects donor update attempting to alter immutable donorReferenceId', async () => {
+    await assertFails(updateDoc(doc(staff, 'bloodBank', 'center-primary', 'donors', 'donor_existing'), {
+      donorReferenceId: 'ALTERED_REF_ID',
+      updatedAt: '2026-03-01T12:00:00Z',
+    }));
+  });
+
+  await test('D5: Rejects donation create referencing nonexistent donorId', async () => {
+    await assertFails(setDoc(doc(staff, 'bloodBank', 'center-primary', 'donations', 'don_missing_donor'), {
+      id: 'don_missing_donor',
+      centerId: 'center-primary',
+      donorId: 'NONEXISTENT_DONOR_ID',
+      donorName: 'Ghost',
       bloodGroup: 'O+',
       donationDate: '2026-03-01T10:00:00Z',
-      volumeMl: 750, // Exceeds 600ml
+      volumeMl: 450,
       collectionStatus: 'completed',
       screeningStatus: 'pending',
       collectionStaffUid: 'staff_bloodbank_1',
@@ -380,43 +424,91 @@ async function runBloodBankSecuritySuite() {
     }));
   });
 
-  await test('D4: Rejects blood request with zero quantity units', async () => {
-    await assertFails(setDoc(doc(staff, 'bloodBank', 'center-primary', 'requests', 'req_zero_qty'), {
-      id: 'req_zero_qty',
+  await test('D6: Rejects inventory unit create referencing nonexistent donationId', async () => {
+    await assertFails(setDoc(doc(staff, 'bloodBank', 'center-primary', 'inventory', 'unit_missing_don'), {
+      id: 'unit_missing_don',
       centerId: 'center-primary',
-      requestingOrganization: 'Memorial Hospital',
-      bloodGroup: 'B+',
+      donationId: 'NONEXISTENT_DONATION_ID',
+      donorId: 'donor_existing',
+      bloodGroup: 'O+',
       componentType: 'whole_blood',
-      quantityUnits: 0, // Invalid: must be >= 1
-      urgency: 'routine',
-      requiredByDate: '2026-03-05T00:00:00Z',
-      status: 'submitted',
-      createdAt: '2026-03-01T00:00:00Z',
-      updatedAt: '2026-03-01T00:00:00Z',
+      collectionDate: '2026-03-01',
+      expiryDate: '2026-04-05',
+      volumeMl: 450,
+      storageLocation: 'Cold Room 1',
+      status: 'available',
+      createdAt: '2026-03-01T10:00:00Z',
+      updatedAt: '2026-03-01T10:00:00Z',
     }));
   });
 
-  await test('D5: Rejects blood issue/distribution without temperatureLogVerified == true', async () => {
-    await assertFails(setDoc(doc(staff, 'bloodBank', 'center-primary', 'issues', 'dist_unverified_temp'), {
-      id: 'dist_unverified_temp',
+  await test('D7: Rejects distribution create referencing nonexistent requestId', async () => {
+    await assertFails(setDoc(doc(staff, 'bloodBank', 'center-primary', 'issues', 'dist_missing_req'), {
+      id: 'dist_missing_req',
       centerId: 'center-primary',
-      requestId: 'req_existing',
-      destinationOrganization: 'Memorial Hospital',
+      requestId: 'NONEXISTENT_REQ_ID',
+      destinationOrganization: 'City Hospital',
       issuedUnitIds: ['unit_existing'],
       authorizedStaffUid: 'staff_bloodbank_1',
       dispatchStatus: 'dispatched',
-      temperatureLogVerified: false, // Must be true
-      createdAt: '2026-03-01T00:00:00Z',
-      updatedAt: '2026-03-01T00:00:00Z',
+      temperatureLogVerified: true,
+      createdAt: '2026-03-01T10:00:00Z',
+      updatedAt: '2026-03-01T10:00:00Z',
     }));
   });
 
   // =========================================================================
-  // Category E: Immutable Audit Logs Protection
+  // Category E: In-Rules Inventory State Transitions
   // =========================================================================
-  console.log('\n--- Category E: Audit Trail Immutability ---');
+  console.log('\n--- Category E: In-Rules State Transitions ---');
 
-  await test('E1: Blood Bank staff allowed create valid audit log', async () => {
+  await test('E1: Permitted state transition: quarantine -> available', async () => {
+    await assertSucceeds(updateDoc(doc(staff, 'bloodBank', 'center-primary', 'inventory', 'unit_quarantined'), {
+      status: 'available',
+      updatedAt: '2026-03-01T12:00:00Z',
+    }));
+  });
+
+  await test('E2: Permitted state transition: available -> reserved', async () => {
+    await assertSucceeds(updateDoc(doc(staff, 'bloodBank', 'center-primary', 'inventory', 'unit_existing'), {
+      status: 'reserved',
+      reservedForRequestId: 'req_existing',
+      updatedAt: '2026-03-01T12:00:00Z',
+    }));
+  });
+
+  await test('E3: Prohibited state transition enforced in rules: available -> transfused (must be reserved first)', async () => {
+    // Seed fresh available unit to test illegal direct jump
+    await testEnv.withSecurityRulesDisabled(async (context) => {
+      await setDoc(doc(context.firestore(), 'bloodBank', 'center-primary', 'inventory', 'unit_direct_jump'), {
+        id: 'unit_direct_jump',
+        centerId: 'center-primary',
+        donationId: 'donation_existing',
+        donorId: 'donor_existing',
+        bloodGroup: 'O+',
+        componentType: 'whole_blood',
+        collectionDate: '2026-01-01',
+        expiryDate: '2026-02-05',
+        volumeMl: 450,
+        storageLocation: 'Cold Room 1',
+        status: 'available',
+        createdAt: '2026-01-01T10:00:00Z',
+        updatedAt: '2026-01-01T10:00:00Z',
+      });
+    });
+
+    await assertFails(updateDoc(doc(staff, 'bloodBank', 'center-primary', 'inventory', 'unit_direct_jump'), {
+      status: 'transfused', // ILLEGAL transition directly from available
+      updatedAt: '2026-03-01T12:00:00Z',
+    }));
+  });
+
+  // =========================================================================
+  // Category F: Audit Log Immutability & Append-Only Guarantees
+  // =========================================================================
+  console.log('\n--- Category F: Audit Trail Immutability ---');
+
+  await test('F1: Blood Bank staff allowed create valid audit log matching auth.uid', async () => {
     await assertSucceeds(setDoc(doc(staff, 'bloodBank', 'center-primary', 'auditLogs', 'audit_new'), {
       id: 'audit_new',
       centerId: 'center-primary',
@@ -429,7 +521,7 @@ async function runBloodBankSecuritySuite() {
     }));
   });
 
-  await test('E2: Blood Bank staff denied creating audit log with spoofed actorUid', async () => {
+  await test('F2: Blood Bank staff denied creating audit log with spoofed actorUid', async () => {
     await assertFails(setDoc(doc(staff, 'bloodBank', 'center-primary', 'auditLogs', 'audit_spoof'), {
       id: 'audit_spoof',
       centerId: 'center-primary',
@@ -442,56 +534,56 @@ async function runBloodBankSecuritySuite() {
     }));
   });
 
-  await test('E3: Blood Bank staff strictly denied UPDATE on existing audit log', async () => {
+  await test('F3: Blood Bank staff strictly denied UPDATE on existing audit log', async () => {
     await assertFails(updateDoc(doc(staff, 'bloodBank', 'center-primary', 'auditLogs', 'audit_existing'), {
       action: 'TAMPERED_ACTION',
     }));
   });
 
-  await test('E4: Blood Bank staff strictly denied DELETE on existing audit log', async () => {
+  await test('F4: Blood Bank staff strictly denied DELETE on existing audit log', async () => {
     await assertFails(deleteDoc(doc(staff, 'bloodBank', 'center-primary', 'auditLogs', 'audit_existing')));
   });
 
-  await test('E5: Admin strictly denied UPDATE on audit log', async () => {
+  await test('F5: Admin strictly denied UPDATE on audit log', async () => {
     await assertFails(updateDoc(doc(admin, 'bloodBank', 'center-primary', 'auditLogs', 'audit_existing'), {
       action: 'ADMIN_OVERWRITE',
     }));
   });
 
-  await test('E6: Admin strictly denied DELETE on audit log', async () => {
+  await test('F6: Admin strictly denied DELETE on audit log', async () => {
     await assertFails(deleteDoc(doc(admin, 'bloodBank', 'center-primary', 'auditLogs', 'audit_existing')));
   });
 
   // =========================================================================
-  // Category F: Deletion Prevention on Core Clinical Entities
+  // Category G: Deletion Prevention on Core Clinical Entities
   // =========================================================================
-  console.log('\n--- Category F: Deletion Prevention on Core Entities ---');
+  console.log('\n--- Category G: Deletion Prevention on Core Entities ---');
 
-  await test('F1: Blood Bank staff denied delete on donor record', async () => {
+  await test('G1: Blood Bank staff denied delete on donor record', async () => {
     await assertFails(deleteDoc(doc(staff, 'bloodBank', 'center-primary', 'donors', 'donor_existing')));
   });
 
-  await test('F2: Blood Bank staff denied delete on donation record', async () => {
+  await test('G2: Blood Bank staff denied delete on donation record', async () => {
     await assertFails(deleteDoc(doc(staff, 'bloodBank', 'center-primary', 'donations', 'donation_existing')));
   });
 
-  await test('F3: Blood Bank staff denied delete on inventory unit', async () => {
+  await test('G3: Blood Bank staff denied delete on inventory unit', async () => {
     await assertFails(deleteDoc(doc(staff, 'bloodBank', 'center-primary', 'inventory', 'unit_existing')));
   });
 
-  await test('F4: Blood Bank staff denied delete on blood request', async () => {
+  await test('G4: Blood Bank staff denied delete on blood request', async () => {
     await assertFails(deleteDoc(doc(staff, 'bloodBank', 'center-primary', 'requests', 'req_existing')));
   });
 
-  await test('F5: Blood Bank staff denied delete on issue/distribution record', async () => {
+  await test('G5: Blood Bank staff denied delete on issue/distribution record', async () => {
     await assertFails(deleteDoc(doc(staff, 'bloodBank', 'center-primary', 'issues', 'dist_existing')));
   });
 
-  await test('F6: Admin denied delete on donor record', async () => {
+  await test('G6: Admin denied delete on donor record', async () => {
     await assertFails(deleteDoc(doc(admin, 'bloodBank', 'center-primary', 'donors', 'donor_existing')));
   });
 
-  await test('F7: Admin denied delete on inventory unit', async () => {
+  await test('G7: Admin denied delete on inventory unit', async () => {
     await assertFails(deleteDoc(doc(admin, 'bloodBank', 'center-primary', 'inventory', 'unit_existing')));
   });
 

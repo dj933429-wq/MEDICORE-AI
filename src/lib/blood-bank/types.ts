@@ -1,10 +1,15 @@
 /**
  * MEDICORE-AI — Isolated Blood Bank Domain Types
- * Strict domain models for Blood Bank Management System (Phase 4A)
+ * Strict domain models for Blood Bank Management System (Phase 4A / 4A.1 Hardening)
  *
  * NOTE: Clinical eligibility, screening validity, and transfusion compatibility
  * must be verified by licensed medical staff and laboratory testing.
  * The system records staff-verified outcomes and does NOT make clinical decisions automatically.
+ *
+ * DATA MINIMIZATION:
+ * Personal identifying information is minimized. Donors are primarily identified via
+ * facility-scoped `donorReferenceId` (e.g. "DON-2026-0042"). Government identity documents
+ * (national ID/passport) are optional and minimized.
  */
 
 export type BloodGroup = 'A+' | 'A-' | 'B+' | 'B-' | 'AB+' | 'AB-' | 'O+' | 'O-';
@@ -77,12 +82,15 @@ export type AuditEntity =
  * Donor Record
  * Identity, contact details, blood group, staff-verified eligibility status,
  * donation history references, and timestamps.
+ * 
+ * Uses `donorReferenceId` for data minimization.
  */
 export interface BloodDonor {
   id: string;
   centerId: string;
+  donorReferenceId: string; // Minimized facility-scoped donor ID (e.g. DON-2026-0001)
   fullName: string;
-  nationalIdOrPassport: string;
+  nationalIdOrPassport?: string; // Optional masked/tokenized government identifier
   dateOfBirth: string; // YYYY-MM-DD
   gender: DonorGender;
   bloodGroup: BloodGroup;
@@ -110,6 +118,7 @@ export interface BloodDonation {
   id: string;
   centerId: string;
   donorId: string;
+  donorReferenceId?: string;
   donorName: string;
   bloodGroup: BloodGroup;
   donationDate: string; // ISO 8601 string
@@ -137,7 +146,7 @@ export interface BloodInventoryUnit {
   bloodGroup: BloodGroup;
   componentType: BloodComponentType;
   collectionDate: string; // YYYY-MM-DD
-  expiryDate: string; // YYYY-MM-DD
+  expiryDate: string; // YYYY-MM-DD (Staff-approved)
   volumeMl: number;
   storageLocation: string; // e.g. "Cold Room 1, Shelf B-3"
   status: InventoryUnitStatus;
