@@ -7,7 +7,7 @@
  * `src/lib/blood-bank/firestore-service.ts` directly against the local Firestore Emulator
  * and the proposed combined security rules.
  *
- * Verifies all 11 core transaction invariants with post-transaction document assertions:
+ * Verifies all 13 core transaction invariants with post-transaction document assertions:
  * 1. Approved requests can receive valid inventory units.
  * 2. Submitted and under-review requests cannot receive units.
  * 3. Duplicate unit IDs are rejected.
@@ -19,11 +19,13 @@
  * 9. Cancelled distributions do not incorrectly reserve inventory or increase fulfillment.
  * 10. Failed transactions do not leave partial issue, inventory, request, or audit changes (atomicity).
  * 11. Concurrent attempts cannot allocate the same inventory unit twice.
+ * 12. Delivered dispatch rejects unreserved (available) inventory units.
+ * 13. Delivered dispatch succeeds for correctly reserved units and transitions them to transfused.
  */
 
 import { initializeTestEnvironment } from '@firebase/rules-unit-testing';
 import { readFileSync } from 'fs';
-import { doc, getDoc, setDoc, type Firestore } from 'firebase/firestore';
+import { doc, getDoc, setDoc, collection, getDocs, type Firestore } from 'firebase/firestore';
 import type { BloodDistribution } from '../../src/lib/blood-bank/types';
 import { createDistribution } from '../../src/lib/blood-bank/firestore-service';
 import { BloodBankValidationError } from '../../src/lib/blood-bank/validation';
@@ -681,6 +683,12 @@ async function runRealDistributionTransactionSuite() {
   // TEST 10: Failed transactions do not leave partial changes (Atomicity)
   // ---------------------------------------------------------------------------
   await test('10. Failed transactions leave no partial issue, inventory, request or audit changes', async () => {
+    // Record baseline state of issues and auditLogs before attempting the failing transaction
+    const issuesColl = collection(staff, 'bloodBank', 'center-primary', 'issues');
+    const auditColl = collection(staff, 'bloodBank', 'center-primary', 'auditLogs');
+    const preIssuesSnap = await getDocs(issuesColl);
+    const preAuditSnap = await getDocs(auditColl);
+
     await seedTestRecords([
       [
         'requests',
@@ -741,15 +749,37 @@ async function runRealDistributionTransactionSuite() {
     }
     if (!threw) throw new Error('Transaction should have failed on nonexistent unit');
 
-    // Verify unit_atomic_good was NOT altered
+    // 1. Verify unit_atomic_good was NOT altered in inventory
     const unitSnap = await getDoc(doc(staff, 'bloodBank', 'center-primary', 'inventory', 'unit_atomic_good'));
     if (unitSnap.data()?.status !== 'available') throw new Error('Unit should have remained available after rollback');
     if (unitSnap.data()?.reservedForRequestId) throw new Error('Unit should not be reserved');
 
-    // Verify request was NOT altered
+    // 2. Verify request was NOT altered in requests
     const reqSnap = await getDoc(doc(staff, 'bloodBank', 'center-primary', 'requests', 'req_atomic_test'));
     if (reqSnap.data()?.status !== 'approved') throw new Error('Request should have remained approved');
     if (reqSnap.data()?.fulfilledUnitIds.length !== 0) throw new Error('Request fulfilledUnitIds should remain empty');
+
+    // 3. Verify NO issue document was created in issues
+    const postIssuesSnap = await getDocs(issuesColl);
+    if (postIssuesSnap.size !== preIssuesSnap.size) {
+      throw new Error(`Expected issues count to remain ${preIssuesSnap.size}, but got ${postIssuesSnap.size}`);
+    }
+    const matchingIssues = postIssuesSnap.docs.filter((d) => d.data()?.requestId === 'req_atomic_test');
+    if (matchingIssues.length !== 0) {
+      throw new Error(`Expected 0 issue documents for failed request, found ${matchingIssues.length}`);
+    }
+
+    // 4. Verify NO audit document was created for the failed distribution
+    const postAuditSnap = await getDocs(auditColl);
+    if (postAuditSnap.size !== preAuditSnap.size) {
+      throw new Error(`Expected audit count to remain ${preAuditSnap.size}, but got ${postAuditSnap.size}`);
+    }
+    const matchingAudits = postAuditSnap.docs.filter(
+      (d) => (d.data()?.details as Record<string, unknown> | undefined)?.requestId === 'req_atomic_test'
+    );
+    if (matchingAudits.length !== 0) {
+      throw new Error(`Expected 0 audit log documents for failed request, found ${matchingAudits.length}`);
+    }
   });
 
   // ---------------------------------------------------------------------------
@@ -858,6 +888,163 @@ async function runRealDistributionTransactionSuite() {
     const winnerRequestId = succeeded[0].value.requestId;
     if (unitSnap.data()?.reservedForRequestId !== winnerRequestId) {
       throw new Error(`Unit reserved for unexpected request: ${unitSnap.data()?.reservedForRequestId}`);
+    }
+  });
+
+  // ---------------------------------------------------------------------------
+  // TEST 12: Delivered dispatch rejects unreserved (available) inventory unit
+  // ---------------------------------------------------------------------------
+  await test('12. Delivered dispatch rejects unreserved (available) inventory unit', async () => {
+    await seedTestRecords([
+      [
+        'requests',
+        'req_deliver_avail',
+        {
+          id: 'req_deliver_avail',
+          centerId: 'center-primary',
+          requestingOrganization: 'Metro Surgical Center',
+          bloodGroup: 'O+',
+          componentType: 'whole_blood',
+          quantityUnits: 1,
+          urgency: 'urgent',
+          requiredByDate: '2026-03-01T10:00:00Z',
+          status: 'approved',
+          fulfilledUnitIds: [],
+          createdAt: '2026-02-01T00:00:00Z',
+          updatedAt: '2026-02-01T00:00:00Z',
+        },
+      ],
+      [
+        'inventory',
+        'unit_deliver_avail',
+        {
+          id: 'unit_deliver_avail',
+          centerId: 'center-primary',
+          donationId: 'don_base',
+          donorId: 'donor_base',
+          bloodGroup: 'O+',
+          componentType: 'whole_blood',
+          collectionDate: '2026-02-01',
+          expiryDate: '2026-03-15',
+          volumeMl: 450,
+          storageLocation: 'Shelf F',
+          status: 'available',
+          createdAt: '2026-02-01T00:00:00Z',
+          updatedAt: '2026-02-01T00:00:00Z',
+        },
+      ],
+    ]);
+
+    let threw = false;
+    try {
+      await createDistribution(
+        {
+          requestId: 'req_deliver_avail',
+          destinationOrganization: 'Metro Surgical Center',
+          issuedUnitIds: ['unit_deliver_avail'],
+          authorizedStaffUid: staffUid,
+          dispatchStatus: 'delivered', // Direct available -> delivered/transfused attempt
+          temperatureLogVerified: true,
+        },
+        actor,
+        staff as unknown as Firestore
+      );
+    } catch (e: unknown) {
+      const err = e as Error;
+      threw = err instanceof BloodBankValidationError && err.message.includes('cannot be delivered directly');
+    }
+    if (!threw) throw new Error('Should have rejected delivering an unreserved available unit directly');
+
+    // Verify unit remains available and unreserved in Firestore
+    const unitSnap = await getDoc(doc(staff, 'bloodBank', 'center-primary', 'inventory', 'unit_deliver_avail'));
+    if (unitSnap.data()?.status !== 'available') throw new Error('Unit status should have remained available');
+    if (unitSnap.data()?.reservedForRequestId) throw new Error('Unit should not have reservedForRequestId');
+
+    // Verify request remains approved with empty fulfilledUnitIds
+    const reqSnap = await getDoc(doc(staff, 'bloodBank', 'center-primary', 'requests', 'req_deliver_avail'));
+    if (reqSnap.data()?.status !== 'approved') throw new Error('Request status should remain approved');
+    if (reqSnap.data()?.fulfilledUnitIds.length !== 0) throw new Error('Request fulfilledUnitIds should remain empty');
+  });
+
+  // ---------------------------------------------------------------------------
+  // TEST 13: Delivered dispatch succeeds for correctly reserved unit and transitions to transfused
+  // ---------------------------------------------------------------------------
+  await test('13. Delivered dispatch succeeds for correctly reserved unit and transitions to transfused', async () => {
+    await seedTestRecords([
+      [
+        'requests',
+        'req_deliver_reserved',
+        {
+          id: 'req_deliver_reserved',
+          centerId: 'center-primary',
+          requestingOrganization: 'Metro Surgical Center',
+          bloodGroup: 'O+',
+          componentType: 'whole_blood',
+          quantityUnits: 1,
+          urgency: 'urgent',
+          requiredByDate: '2026-03-01T10:00:00Z',
+          status: 'approved',
+          fulfilledUnitIds: [],
+          createdAt: '2026-02-01T00:00:00Z',
+          updatedAt: '2026-02-01T00:00:00Z',
+        },
+      ],
+      [
+        'inventory',
+        'unit_deliver_reserved',
+        {
+          id: 'unit_deliver_reserved',
+          centerId: 'center-primary',
+          donationId: 'don_base',
+          donorId: 'donor_base',
+          bloodGroup: 'O+',
+          componentType: 'whole_blood',
+          collectionDate: '2026-02-01',
+          expiryDate: '2026-03-15',
+          volumeMl: 450,
+          storageLocation: 'Shelf F',
+          status: 'reserved',
+          reservedForRequestId: 'req_deliver_reserved',
+          createdAt: '2026-02-01T00:00:00Z',
+          updatedAt: '2026-02-01T00:00:00Z',
+        },
+      ],
+    ]);
+
+    const dist = await createDistribution(
+      {
+        requestId: 'req_deliver_reserved',
+        destinationOrganization: 'Metro Surgical Center',
+        issuedUnitIds: ['unit_deliver_reserved'],
+        authorizedStaffUid: staffUid,
+        dispatchStatus: 'delivered', // Legitimate delivery of reserved unit
+        temperatureLogVerified: true,
+      },
+      actor,
+      staff as unknown as Firestore
+    );
+
+    // Verify issue document exists with delivered status
+    const issueSnap = await getDoc(doc(staff, 'bloodBank', 'center-primary', 'issues', dist.id));
+    if (!issueSnap.exists()) throw new Error('Issue document was not created');
+    if (issueSnap.data()?.dispatchStatus !== 'delivered') throw new Error('Issue dispatchStatus should be delivered');
+
+    // Verify inventory unit transitioned to transfused
+    const unitSnap = await getDoc(doc(staff, 'bloodBank', 'center-primary', 'inventory', 'unit_deliver_reserved'));
+    if (unitSnap.data()?.status !== 'transfused') {
+      throw new Error(`Unit status should be transfused, but got '${unitSnap.data()?.status}'`);
+    }
+    if (unitSnap.data()?.reservedForRequestId !== 'req_deliver_reserved') {
+      throw new Error('Unit reservedForRequestId was lost');
+    }
+
+    // Verify request reached terminal fulfilled status
+    const reqSnap = await getDoc(doc(staff, 'bloodBank', 'center-primary', 'requests', 'req_deliver_reserved'));
+    if (reqSnap.data()?.status !== 'fulfilled') {
+      throw new Error(`Request status should be fulfilled, but got '${reqSnap.data()?.status}'`);
+    }
+    if (!reqSnap.data()?.fulfilledUnitIds.includes('unit_deliver_reserved')) {
+      throw new Error('Request missing fulfilledUnitIds');
     }
   });
 

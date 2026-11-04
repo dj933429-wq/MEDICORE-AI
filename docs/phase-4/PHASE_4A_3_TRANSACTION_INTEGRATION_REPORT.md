@@ -13,7 +13,7 @@
 
 Phase 4A.3 addresses the core transaction, inventory consistency, and fulfillment semantics identified during the Phase 4A.2 code review. Crucially, this review distinguishes between **pure in-memory domain validation tests** and **actual Firestore Emulator transaction integration tests**, subjecting the production `createDistribution()` function from `src/lib/blood-bank/firestore-service.ts` directly to multi-document atomic mutations, rollback conditions, and race condition tests under realistic security rules.
 
-All 11 transaction integration tests, 52 isolated Firestore security rules assertions, 79 domain unit tests, 45 baseline platform security regression tests, and 61 Menstrual Health Tracker regression tests passed with **0 failures**. The Next.js production build succeeded with **0 TypeScript and 0 ESLint errors**.
+All 13 transaction integration tests, 52 isolated Firestore security rules assertions, 79 domain unit tests, 45 baseline platform security regression tests, and 61 Menstrual Health Tracker regression tests passed with **0 failures**. The Next.js production build succeeded with **0 TypeScript and 0 ESLint errors**.
 
 ---
 
@@ -65,10 +65,20 @@ To avoid the false confidence of mock-only test suites, Phase 4A.3 explicitly es
   && get(/databases/$(database)/documents/bloodBank/$(centerId)/requests/$(request.resource.data.requestId)).data.status in ['approved', 'partially_fulfilled']
   ```
 
-### 3.3. Inventory State Transitions & Reservation Ownership
-- **Policy:** Available units must transition to `reserved` upon allocation/dispatch. A unit may only transition to `transfused` when the distribution is marked `delivered`. A cancelled distribution must never reserve units or increment fulfillment.
+### 3.3. Inventory State Transitions & Delivered Status Enforcement
+- **Policy:** Available units must transition to `reserved` upon allocation/dispatch. A unit may only transition to `transfused` when the distribution is marked `delivered`. An `available` unit is strictly forbidden from transitioning directly to `transfused` without first being reserved for the request. A cancelled distribution must never reserve units or increment fulfillment.
 - **Service-Layer Enforcement:**
   ```typescript
+  // Validation loop inside transaction:
+  if (payload.dispatchStatus === 'delivered') {
+    if (unitData.status !== 'reserved' || unitData.reservedForRequestId !== payload.requestId) {
+      throw new BloodBankValidationError(
+        `Unit ${uSnap.id} cannot be delivered directly from '${unitData.status}' status. Units must first be reserved for request ${payload.requestId} before transitioning to delivered/transfused.`
+      );
+    }
+  }
+
+  // Write loop inside transaction:
   if (payload.dispatchStatus === 'cancelled') {
     tx.set(auditRef, fullEvent);
     return; // Early return prevents modifying inventory units or request fulfillment counts
@@ -95,10 +105,15 @@ To avoid the false confidence of mock-only test suites, Phase 4A.3 explicitly es
   && isValidInventoryStateTransition(resource.data.status, request.resource.data.status);
   ```
 
-### 3.4. Request Fulfillment Semantics & Atomic Logging
+### 3.4. Portable Test Runner & Robust Child-Process Handling
+- **Portable Resolution:** Replaced any hardcoded host paths with `spawnSync('npx', ['tsx', '--env-file=.env.local', tsTestPath], { stdio: 'inherit', shell: true })`, ensuring seamless execution from the project root on any environment.
+- **Error Propagation:** Handles process spawn errors (`result.error`) and non-zero or null exit statuses (`result.status === null`), guaranteeing that abnormal terminations or signals are never misreported as success.
+
+### 3.5. Atomicity & Request Fulfillment Semantics
 - **Fulfillment Distinction:**
   - `partially_fulfilled`: Total fulfilled unit count < `quantityUnits`.
   - `fulfilled`: Terminal status reached only when `updatedFulfilled.length >= reqData.quantityUnits`.
+- **Extended Atomicity Assertions:** Verified in Test 10 that failed transactions leave 0 new issue documents and 0 new audit log documents in Firestore, while request and inventory documents remain strictly unaltered.
 - **Atomic Logging (`createAuditRefAndEvent`):**
   - Updated `createAuditRefAndEvent` to accept an optional `firestoreInstance` parameter, enabling atomic enrollment of audit logs within emulator test contexts.
   - Omitted `undefined` properties cleanly to avoid Firestore serialization errors.
@@ -122,10 +137,12 @@ To avoid the false confidence of mock-only test suites, Phase 4A.3 explicitly es
 | **7** | Terminal Request Immutability | Requests in `fulfilled`, `rejected`, and `cancelled` statuses reject new unit issues. | **PASS** |
 | **8** | Non-Available Unit Denial | Units in `quarantine`, `expired`, `discarded`, or `transfused` statuses reject issue attempts. | **PASS** |
 | **9** | Cancelled Issue Semantics | Distribution created with `dispatchStatus: 'cancelled'` writes the issue and audit log, but leaves inventory status as `available` (unreserved) and request `fulfilledUnitIds` empty. | **PASS** |
-| **10** | Transaction Atomicity & Rollback | Transaction issuing valid unit + nonexistent unit fails completely. Post-transaction document read verifies that the valid unit remained `available` (not reserved) and the request remained unfulfilled. | **PASS** |
+| **10** | Transaction Atomicity & Rollback | Transaction issuing valid unit + nonexistent unit fails completely. Post-transaction document read verifies that the valid unit remained `available` (not reserved), the request remained unfulfilled, exactly 0 issue documents were created, and exactly 0 audit log documents were created. | **PASS** |
 | **11** | Concurrent Race Condition | Two simultaneous transactions attempt to allocate the same unit to different requests (`req_concurrent_A` vs `req_concurrent_B`). Exactly 1 succeeds and 1 is rejected; winning request exclusively owns unit reservation. | **PASS** |
+| **12** | Delivered Dispatch Rejects Available Unit | Attempting to create distribution with `dispatchStatus: 'delivered'` directly on an `available` (unreserved) unit throws `BloodBankValidationError`. Post-transaction read verifies unit remained `available` and unreserved. | **PASS** |
+| **13** | Delivered Dispatch Legitimate Transition | Distribution with `dispatchStatus: 'delivered'` on a correctly reserved unit transitions the unit to `transfused`, updates request to `fulfilled`, and records issue document and audit log. | **PASS** |
 
-**Total Integration Tests:** 11 | **Passed:** 11 | **Failed:** 0
+**Total Integration Tests:** 13 | **Passed:** 13 | **Failed:** 0
 
 ---
 
@@ -133,7 +150,7 @@ To avoid the false confidence of mock-only test suites, Phase 4A.3 explicitly es
 
 | Test Suite | Scope | Target | Result |
 | :--- | :--- | :--- | :--- |
-| `tests/blood-bank/blood-bank-distribution-integrity.test.ts` | Real Firestore Transactions & Document State | Firestore Emulator | **11 / 11 PASSED** |
+| `tests/blood-bank/blood-bank-distribution-integrity.test.ts` | Real Firestore Transactions & Document State | Firestore Emulator | **13 / 13 PASSED** |
 | `tests/blood-bank/blood-bank-security.test.mjs` | Rules Invariants, Field Whitelisting, Audit Immutability | Firestore Emulator | **52 / 52 PASSED** |
 | `tests/blood-bank/blood-bank-validation.test.mjs` | Domain Validation, State Transitions, Metrics | Pure Node | **79 / 79 PASSED** |
 | `tests/firestore-security.test.mjs` | Phase 2 Platform Security & RBAC Regressions | Firestore Emulator | **45 / 45 PASSED** |

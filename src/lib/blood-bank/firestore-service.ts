@@ -551,6 +551,16 @@ export async function createDistribution(
           );
         }
       }
+
+      // Delivered status validation: available units cannot transition directly to transfused.
+      // Units must already be reserved for this request before delivery can be confirmed.
+      if (payload.dispatchStatus === 'delivered') {
+        if (unitData.status !== 'reserved' || unitData.reservedForRequestId !== payload.requestId) {
+          throw new BloodBankValidationError(
+            `Unit ${uSnap.id} cannot be delivered directly from '${unitData.status}' status. Units must first be reserved for request ${payload.requestId} before transitioning to delivered/transfused.`
+          );
+        }
+      }
     }
 
     // 2. Transactional writes
