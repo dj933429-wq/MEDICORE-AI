@@ -52,3 +52,7 @@ next-env.d.ts
 
 # local firebase files
 .firebase/
+
+# Playwright
+playwright-report/
+test-results/

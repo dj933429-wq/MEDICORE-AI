@@ -73,33 +73,35 @@ export const AuthProvider = ({ children }) => {
             });
           }
 
-          // **AUTO-CREATE PATIENT PROFILE & PHARMACY LOOKUP LOGIC**
-          try {
-            const patientRef = doc(db, 'patients', firebaseUser.uid);
-            const patientSnap = await getDoc(patientRef);
-            
-            if (!patientSnap.exists()) {
-              await setDoc(patientRef, {
-                name: userData.name || firebaseUser.displayName || firebaseUser.email?.split('@')[0] || 'Unknown',
-                email: firebaseUser.email || '',
-                phone: "",
-                userId: firebaseUser.uid,
-                createdAt: new Date().toISOString()
-              });
-            }
+          // **AUTO-CREATE PATIENT PROFILE & PHARMACY LOOKUP LOGIC (Patients only)**
+          if (effectiveRole === 'patient') {
+            try {
+              const patientRef = doc(db, 'patients', firebaseUser.uid);
+              const patientSnap = await getDoc(patientRef);
+              
+              if (!patientSnap.exists()) {
+                await setDoc(patientRef, {
+                  name: userData.name || firebaseUser.displayName || firebaseUser.email?.split('@')[0] || 'Unknown',
+                  email: firebaseUser.email || '',
+                  phone: "",
+                  userId: firebaseUser.uid,
+                  createdAt: new Date().toISOString()
+                });
+              }
 
-            // Sync minimal pharmacy patient lookup record (displayName, patientReference)
-            const lookupRef = doc(db, 'pharmacyPatientLookup', firebaseUser.uid);
-            const lookupSnap = await getDoc(lookupRef);
-            if (!lookupSnap.exists()) {
-              await setDoc(lookupRef, {
-                displayName: userData.name || firebaseUser.displayName || firebaseUser.email?.split('@')[0] || 'Unknown',
-                patientReference: firebaseUser.uid,
-                createdAt: new Date().toISOString()
-              });
+              // Sync minimal pharmacy patient lookup record (displayName, patientReference)
+              const lookupRef = doc(db, 'pharmacyPatientLookup', firebaseUser.uid);
+              const lookupSnap = await getDoc(lookupRef);
+              if (!lookupSnap.exists()) {
+                await setDoc(lookupRef, {
+                  displayName: userData.name || firebaseUser.displayName || firebaseUser.email?.split('@')[0] || 'Unknown',
+                  patientReference: firebaseUser.uid,
+                  createdAt: new Date().toISOString()
+                });
+              }
+            } catch (patientErr) {
+              console.error("Failed to sync patient profile or pharmacy lookup:", patientErr);
             }
-          } catch (patientErr) {
-            console.error("Failed to sync patient profile or pharmacy lookup:", patientErr);
           }
 
           // **SYNC PUBLIC DOCTOR LOOKUP (If Verified Doctor)**
