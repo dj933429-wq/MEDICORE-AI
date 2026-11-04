@@ -68,6 +68,15 @@ export default function BloodBankPage() {
   // Modals state
   const [activeModal, setActiveModal] = useState<string | null>(null);
 
+  const handleOpenModal = (modal: string) => {
+    if (modal === 'donor') setActiveTab('donors');
+    else if (modal === 'donation') setActiveTab('donations');
+    else if (modal === 'inventory') setActiveTab('inventory');
+    else if (modal === 'request') setActiveTab('requests');
+    else if (modal === 'distribution') setActiveTab('distribution');
+    setActiveModal(modal);
+  };
+
   // Load all blood bank datasets
   const loadAllData = useCallback(async () => {
     try {
@@ -288,7 +297,7 @@ export default function BloodBankPage() {
             recentInventory={inventory}
             recentRequests={requests}
             onNavigateTab={setActiveTab}
-            onOpenModal={setActiveModal}
+            onOpenModal={handleOpenModal}
           />
         )}
 

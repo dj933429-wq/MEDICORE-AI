@@ -14,7 +14,7 @@
 
 import { BloodGroup, BloodComponentType, RequestUrgency, DonorEligibilityStatus, InventoryUnitStatus } from './types';
 
-export const DEFAULT_BLOOD_BANK_CENTER_ID = 'center-primary';
+export const DEFAULT_BLOOD_BANK_CENTER_ID = 'center-metropolis-central';
 
 export const BLOOD_GROUPS: readonly BloodGroup[] = [
   'A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-'

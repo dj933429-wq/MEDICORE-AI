@@ -501,7 +501,7 @@ service cloud.firestore {
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['availableStockSummary', 'updatedAt'])
         && request.resource.data.id == resource.data.id
         && (!('availableStockSummary' in request.resource.data) || request.resource.data.availableStockSummary is map);
-      allow create: if false; // Center documents provisioned via Admin SDK or system setup only
+      allow create: if isAuthenticated() && (isAdmin() || (isBloodBank() && request.resource.data.isExhibitionCenter == true));
       allow delete: if false;
 
       // -----------------------------------------------------------------------
@@ -634,10 +634,13 @@ service cloud.firestore {
           && request.resource.data.keys().hasOnly([
             'id', 'centerId', 'donationId', 'donorId', 'bloodGroup', 'componentType',
             'collectionDate', 'expiryDate', 'volumeMl', 'storageLocation', 'status',
-            'statusReason', 'reservedForRequestId', 'createdAt', 'updatedAt'
+            'statusReason', 'reservedForRequestId', 'isExhibitionData', 'createdAt', 'updatedAt'
           ])
-          && exists(/databases/$(database)/documents/bloodBank/$(centerId)/donations/$(request.resource.data.donationId))
-          && isValidInventoryDonation(centerId, request.resource.data.donationId, request.resource.data.donorId, request.resource.data.bloodGroup)
+          && (
+            (exists(/databases/$(database)/documents/bloodBank/$(centerId)/donations/$(request.resource.data.donationId)) &&
+             isValidInventoryDonation(centerId, request.resource.data.donationId, request.resource.data.donorId, request.resource.data.bloodGroup)) ||
+            (request.resource.data.isExhibitionData == true)
+          )
           && request.resource.data.bloodGroup in ['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-']
           && request.resource.data.componentType in ['whole_blood', 'red_blood_cells', 'platelets', 'fresh_frozen_plasma', 'cryoprecipitate']
           && request.resource.data.status == 'available'
@@ -891,11 +894,15 @@ service cloud.firestore {
         isAdmin()
       );
 
-      // Patients and Doctors can create network requests bound to their authenticated UID
-      allow create: if isAuthenticated() && (isPatient() || isDoctor())
+      // Patients and Doctors can create network requests bound to their authenticated UID (or staff for exhibition)
+      allow create: if isAuthenticated() && (
+        isPatient() || isDoctor() || (isBloodBank() && request.resource.data.isExhibitionData == true)
+      )
         && request.resource.data.id == requestId
-        && request.resource.data.requesterUid == request.auth.uid
-        && request.resource.data.requesterRole == request.auth.token.role
+        && (request.resource.data.isExhibitionData == true || (
+          request.resource.data.requesterUid == request.auth.uid &&
+          request.resource.data.requesterRole == request.auth.token.role
+        ))
         && request.resource.data.status == 'submitted'
         && request.resource.data.requestType in ['targeted', 'shortage_broadcast']
         && (

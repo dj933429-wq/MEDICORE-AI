@@ -328,9 +328,33 @@ export const EXHIBITION_INVENTORY_UNITS: BloodInventoryUnit[] = [
 /**
  * Seeds exhibition centers, requests, and units into Firestore
  */
+/**
+ * Seeds exhibition centers, requests, units, donors, and donations into Firestore.
+ * Prioritizes the authoritative server-side Admin SDK route (/api/blood-bank/seed-exhibition),
+ * with graceful fallback to client-side batch write.
+ */
 export async function seedExhibitionNetworkData(
   firestoreInstance = db
 ): Promise<{ centersCount: number; requestsCount: number; inventoryCount: number }> {
+  if (typeof window !== 'undefined' && typeof fetch !== 'undefined') {
+    try {
+      const res = await fetch('/api/blood-bank/seed-exhibition', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        return {
+          centersCount: data.centersCount || EXHIBITION_BLOOD_BANK_CENTERS.length,
+          requestsCount: data.requestsCount || EXHIBITION_NETWORK_REQUESTS.length,
+          inventoryCount: data.inventoryCount || EXHIBITION_INVENTORY_UNITS.length,
+        };
+      }
+    } catch (apiErr) {
+      console.warn('[ExhibitionData] API seed route failed, using client fallback:', apiErr);
+    }
+  }
+
   const batch = writeBatch(firestoreInstance);
 
   // 1. Seed centers

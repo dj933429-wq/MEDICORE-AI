@@ -343,3 +343,30 @@ Medicore-AI is an AI-powered healthcare management platform built on Next.js 16 
     - `npm run build`: Success across all 15 routes in Next.js 16.2.0 production build.
   - **Documentation:** Authored comprehensive report in `docs/phase-4/PHASE_4B_SHARED_NETWORK_REPORT.md`.
 
+---
+
+### Active Investigation & Remediation: Blood Bank Dashboard (`/dashboard/blood-bank`) Button Audit
+
+#### 1. Root-Cause Analysis of Failing Buttons
+1. **Overview Quick Action Buttons ("Register Donor", "Record Donation", "Add Blood Unit", "Submit Blood Request")**:
+   - `OverviewTab.tsx` action buttons invoke `onOpenModal(modal)`, which set `activeModal = 'donor' | 'donation' | 'inventory' | 'request'`, but did NOT switch `activeTab` from `'overview'`.
+   - Because modals are defined only within conditional tab blocks (`{activeTab === 'donors'}`, `{activeTab === 'donations'}`, etc.), no modal was mounted in the DOM when clicking these buttons from Overview. The buttons appeared unresponsive.
+2. **Firestore `Unsupported field value: undefined` Crash on Submissions**:
+   - In `DonorsTab.tsx` and other form handlers, optional text inputs pass `field: value || undefined`.
+   - Firebase JS SDK strictly prohibits `undefined` document fields, causing `WriteBatch.set()` to throw an unhandled error (`Unsupported field value: undefined (found in field nationalIdOrPassport...)`).
+3. **Center ID Disconnect**:
+   - `DEFAULT_BLOOD_BANK_CENTER_ID` in `constants.ts` defaulted to `'center-primary'`, whereas `NetworkTab.tsx` and exhibition seeds use `'center-metropolis-central'`.
+   - This caused inventory and records to be fetched from `center-primary` (empty), making it impossible to see stock or accept network requests for Metropolis Central.
+4. **Seed Exhibition Network Data Blocked by Client Rules**:
+   - Client-side execution of `seedExhibitionNetworkData()` was blocked by Firestore rules disallowing `blood_bank` role from creating `networkRequests` (only `patient`/`doctor`) and creating `/bloodBank/{centerId}` centers.
+
+#### 2. Actionable Remediation Plan
+- **Step 1:** Add recursive `cleanPayload(obj)` in `src/lib/blood-bank/firestore-service.ts` to automatically strip any `undefined` properties before writing to Firestore.
+- **Step 2:** Update `DEFAULT_BLOOD_BANK_CENTER_ID` in `constants.ts` to `'center-metropolis-central'`.
+- **Step 3:** Update `src/app/dashboard/blood-bank/page.tsx` so `onOpenModal` automatically switches to the relevant tab (`setActiveTab(tab)`) before opening the modal dialog.
+- **Step 4:** Implement server-side route `src/app/api/blood-bank/seed-exhibition/route.ts` using `adminDb` to seed complete demo exhibition data (centers, requests, units, donors, donations) reliably.
+- **Step 5:** Fix `DonationsTab.tsx` donor dropdown to display `d.donorReferenceId`.
+- **Step 6:** Update `firestore.rules` to allow `isBloodBank()` to create exhibition inventory and centers.
+- **Step 7:** Run end-to-end tests against both local dev server and Vercel production to verify every single button and modal works smoothly.
+
+

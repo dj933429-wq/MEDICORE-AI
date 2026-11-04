@@ -54,6 +54,22 @@ function getCenterId(centerId?: string): string {
 /**
  * Helper to build an audit event object and its DocumentReference
  */
+export function cleanPayload<T>(obj: T): T {
+  if (obj === null || typeof obj !== 'object') {
+    return obj;
+  }
+  if (Array.isArray(obj)) {
+    return obj.map(cleanPayload) as unknown as T;
+  }
+  const result: Record<string, any> = {};
+  for (const [key, value] of Object.entries(obj)) {
+    if (value !== undefined) {
+      result[key] = cleanPayload(value);
+    }
+  }
+  return result as T;
+}
+
 function createAuditRefAndEvent(
   centerId: string,
   event: Omit<BloodBankAuditEvent, 'id' | 'centerId' | 'timestamp'>,
@@ -68,7 +84,7 @@ function createAuditRefAndEvent(
     ...(event.actorEmail ? { actorEmail: event.actorEmail } : {}),
     timestamp: new Date().toISOString(),
   };
-  return { auditRef, fullEvent };
+  return { auditRef, fullEvent: cleanPayload(fullEvent) };
 }
 
 // =============================================================================
@@ -121,7 +137,7 @@ export async function createDonor(
 
   // Atomic batch write: donor + audit record
   const batch = writeBatch(db);
-  batch.set(donorRef, newDonor);
+  batch.set(donorRef, cleanPayload(newDonor));
   batch.set(auditRef, fullEvent);
   await batch.commit();
 
@@ -188,7 +204,7 @@ export async function createDonation(
     const currentCount = donorSnap.data().donationCount || 0;
 
     // 2. Transactional writes
-    tx.set(donationRef, newDonation);
+    tx.set(donationRef, cleanPayload(newDonation));
 
     if (payload.collectionStatus === 'completed') {
       tx.update(donorRef, {
@@ -313,7 +329,7 @@ export async function createInventoryUnit(
       throw new BloodBankValidationError(`Inventory unit with Barcode ID ${newUnit.id} already exists.`);
     }
 
-    tx.set(unitRef, newUnit);
+    tx.set(unitRef, cleanPayload(newUnit));
     tx.set(auditRef, fullEvent);
   });
 
@@ -423,7 +439,7 @@ export async function createBloodRequest(
   });
 
   const batch = writeBatch(db);
-  batch.set(reqRef, newRequest);
+  batch.set(reqRef, cleanPayload(newRequest));
   batch.set(auditRef, fullEvent);
   await batch.commit();
 
@@ -649,7 +665,7 @@ export async function createDistribution(
     // certify that staff have verified clinical compatibility and cold chain prior to dispatch.
 
     // 2. Transactional writes
-    tx.set(distRef, newDistribution);
+    tx.set(distRef, cleanPayload(newDistribution));
 
     // If the distribution itself is created with dispatchStatus 'cancelled',
     // units are NOT reserved or transfused, and request fulfillment counts are NOT incremented.

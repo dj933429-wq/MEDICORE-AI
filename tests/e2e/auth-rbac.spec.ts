@@ -29,6 +29,11 @@ const USERS = {
 
 test.describe('Module 1: Authentication & RBAC Routing', () => {
 
+  test.beforeEach(async ({ context }) => {
+    await context.clearCookies();
+    await context.clearPermissions();
+  });
+
   test('1.1 Patient login and dashboard view', async ({ page }) => {
     await page.goto('/login');
     await page.fill('#email', USERS.patient.email);

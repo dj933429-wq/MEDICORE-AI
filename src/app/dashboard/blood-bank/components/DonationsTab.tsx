@@ -228,7 +228,7 @@ export default function DonationsTab({
                     <option value="">-- Select Donor --</option>
                     {eligibleDonors.map((d) => (
                       <option key={d.id} value={d.id}>
-                        {d.fullName} ({d.bloodGroup}) — ID: {d.nationalIdOrPassport}
+                        {d.fullName} ({d.bloodGroup}) — Ref: {d.donorReferenceId}
                       </option>
                     ))}
                   </select>
