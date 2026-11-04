@@ -46,6 +46,75 @@
           (fromStatus == 'in_transit' && toStatus in ['delivered', 'cancelled']);
       }
 
+      // Helper function to verify that all inventory units in a list (bounded up to 4 units) are transfused
+      function areUnitsTransfused(centerId, unitList) {
+        return unitList.size() == 0 || (
+          unitList.size() == 1 ? (getAfter(/databases/$(database)/documents/bloodBank/$(centerId)/inventory/$(unitList[0])).data.status == 'transfused') :
+          unitList.size() == 2 ? (
+            getAfter(/databases/$(database)/documents/bloodBank/$(centerId)/inventory/$(unitList[0])).data.status == 'transfused' &&
+            getAfter(/databases/$(database)/documents/bloodBank/$(centerId)/inventory/$(unitList[1])).data.status == 'transfused'
+          ) :
+          unitList.size() == 3 ? (
+            getAfter(/databases/$(database)/documents/bloodBank/$(centerId)/inventory/$(unitList[0])).data.status == 'transfused' &&
+            getAfter(/databases/$(database)/documents/bloodBank/$(centerId)/inventory/$(unitList[1])).data.status == 'transfused' &&
+            getAfter(/databases/$(database)/documents/bloodBank/$(centerId)/inventory/$(unitList[2])).data.status == 'transfused'
+          ) :
+          unitList.size() == 4 ? (
+            getAfter(/databases/$(database)/documents/bloodBank/$(centerId)/inventory/$(unitList[0])).data.status == 'transfused' &&
+            getAfter(/databases/$(database)/documents/bloodBank/$(centerId)/inventory/$(unitList[1])).data.status == 'transfused' &&
+            getAfter(/databases/$(database)/documents/bloodBank/$(centerId)/inventory/$(unitList[2])).data.status == 'transfused' &&
+            getAfter(/databases/$(database)/documents/bloodBank/$(centerId)/inventory/$(unitList[3])).data.status == 'transfused'
+          ) :
+          false // Unbounded lists cannot be verified within Firestore Rules limits; require trusted server boundary
+        );
+      }
+
+      // Helper function to verify that all allocated units being removed are either delivered (transfused) or released (available)
+      function areAllocatedUnitsReleasedOrTransfused(centerId, unitList) {
+        return unitList.size() == 0 || (
+          unitList.size() == 1 ? (getAfter(/databases/$(database)/documents/bloodBank/$(centerId)/inventory/$(unitList[0])).data.status in ['available', 'transfused']) :
+          unitList.size() == 2 ? (
+            getAfter(/databases/$(database)/documents/bloodBank/$(centerId)/inventory/$(unitList[0])).data.status in ['available', 'transfused'] &&
+            getAfter(/databases/$(database)/documents/bloodBank/$(centerId)/inventory/$(unitList[1])).data.status in ['available', 'transfused']
+          ) :
+          unitList.size() == 3 ? (
+            getAfter(/databases/$(database)/documents/bloodBank/$(centerId)/inventory/$(unitList[0])).data.status in ['available', 'transfused'] &&
+            getAfter(/databases/$(database)/documents/bloodBank/$(centerId)/inventory/$(unitList[1])).data.status in ['available', 'transfused'] &&
+            getAfter(/databases/$(database)/documents/bloodBank/$(centerId)/inventory/$(unitList[2])).data.status in ['available', 'transfused']
+          ) :
+          unitList.size() == 4 ? (
+            getAfter(/databases/$(database)/documents/bloodBank/$(centerId)/inventory/$(unitList[0])).data.status in ['available', 'transfused'] &&
+            getAfter(/databases/$(database)/documents/bloodBank/$(centerId)/inventory/$(unitList[1])).data.status in ['available', 'transfused'] &&
+            getAfter(/databases/$(database)/documents/bloodBank/$(centerId)/inventory/$(unitList[2])).data.status in ['available', 'transfused'] &&
+            getAfter(/databases/$(database)/documents/bloodBank/$(centerId)/inventory/$(unitList[3])).data.status in ['available', 'transfused']
+          ) :
+          false // Unbounded lists cannot be verified within Firestore Rules limits; require trusted server boundary
+        );
+      }
+
+      // Helper function to verify that all inventory units in a list (bounded up to 4 units) are available or disposed
+      function areUnitsAvailableOrDisposed(centerId, unitList) {
+        return unitList.size() == 0 || (
+          unitList.size() == 1 ? (getAfter(/databases/$(database)/documents/bloodBank/$(centerId)/inventory/$(unitList[0])).data.status in ['available', 'quarantine', 'discarded', 'expired']) :
+          unitList.size() == 2 ? (
+            getAfter(/databases/$(database)/documents/bloodBank/$(centerId)/inventory/$(unitList[0])).data.status in ['available', 'quarantine', 'discarded', 'expired'] &&
+            getAfter(/databases/$(database)/documents/bloodBank/$(centerId)/inventory/$(unitList[1])).data.status in ['available', 'quarantine', 'discarded', 'expired']
+          ) :
+          unitList.size() == 3 ? (
+            getAfter(/databases/$(database)/documents/bloodBank/$(centerId)/inventory/$(unitList[0])).data.status in ['available', 'quarantine', 'discarded', 'expired'] &&
+            getAfter(/databases/$(database)/documents/bloodBank/$(centerId)/inventory/$(unitList[1])).data.status in ['available', 'quarantine', 'discarded', 'expired'] &&
+            getAfter(/databases/$(database)/documents/bloodBank/$(centerId)/inventory/$(unitList[2])).data.status in ['available', 'quarantine', 'discarded', 'expired']
+          ) :
+          unitList.size() == 4 ? (
+            getAfter(/databases/$(database)/documents/bloodBank/$(centerId)/inventory/$(unitList[0])).data.status in ['available', 'quarantine', 'discarded', 'expired'] &&
+            getAfter(/databases/$(database)/documents/bloodBank/$(centerId)/inventory/$(unitList[1])).data.status in ['available', 'quarantine', 'discarded', 'expired'] &&
+            getAfter(/databases/$(database)/documents/bloodBank/$(centerId)/inventory/$(unitList[2])).data.status in ['available', 'quarantine', 'discarded', 'expired'] &&
+            getAfter(/databases/$(database)/documents/bloodBank/$(centerId)/inventory/$(unitList[3])).data.status in ['available', 'quarantine', 'discarded', 'expired']
+          ) :
+          false // Unbounded lists cannot be verified within Firestore Rules limits; require trusted server boundary
+        );
+      }
+
       // Center metadata document: read-only for authenticated blood bank staff
       allow read: if isAuthenticated() && isBloodBank();
       allow write: if false; // Center documents provisioned via Admin SDK only
@@ -282,7 +351,7 @@
             resource.data.allocatedUnitIds.size() == 0 ||
             request.resource.data.allocatedUnitIds.hasAll(resource.data.allocatedUnitIds) ||
             request.resource.data.fulfilledUnitIds.hasAll(resource.data.allocatedUnitIds) ||
-            getAfter(/databases/$(database)/documents/bloodBank/$(centerId)/inventory/$(resource.data.allocatedUnitIds[0])).data.status in ['available', 'transfused']
+            areAllocatedUnitsReleasedOrTransfused(centerId, resource.data.allocatedUnitIds)
           )
           && (
             !(request.resource.data.status in ['partially_fulfilled', 'fulfilled']) || (
@@ -291,7 +360,7 @@
               (!('fulfilledUnitIds' in resource.data) || request.resource.data.fulfilledUnitIds.size() > resource.data.fulfilledUnitIds.size()) &&
               (request.resource.data.status != 'fulfilled' || request.resource.data.fulfilledUnitIds.size() >= resource.data.quantityUnits) &&
               (request.resource.data.status != 'partially_fulfilled' || request.resource.data.fulfilledUnitIds.size() < resource.data.quantityUnits) &&
-              getAfter(/databases/$(database)/documents/bloodBank/$(centerId)/inventory/$(request.resource.data.fulfilledUnitIds[0])).data.status == 'transfused'
+              areUnitsTransfused(centerId, request.resource.data.fulfilledUnitIds)
             )
           )
           && (
@@ -357,13 +426,15 @@
               resource.data.dispatchStatus in ['prepared', 'dispatched', 'in_transit'] &&
               request.resource.data.deliveredAt is string &&
               getAfter(/databases/$(database)/documents/bloodBank/$(centerId)/requests/$(resource.data.requestId)).data.status in ['partially_fulfilled', 'fulfilled'] &&
-              getAfter(/databases/$(database)/documents/bloodBank/$(centerId)/requests/$(resource.data.requestId)).data.fulfilledUnitIds.hasAll(resource.data.issuedUnitIds)
+              getAfter(/databases/$(database)/documents/bloodBank/$(centerId)/requests/$(resource.data.requestId)).data.fulfilledUnitIds.hasAll(resource.data.issuedUnitIds) &&
+              areUnitsTransfused(centerId, resource.data.issuedUnitIds)
             )
           )
           && (
             request.resource.data.dispatchStatus != 'cancelled' || (
               resource.data.dispatchStatus in ['prepared', 'dispatched', 'in_transit'] &&
-              !getAfter(/databases/$(database)/documents/bloodBank/$(centerId)/requests/$(resource.data.requestId)).data.allocatedUnitIds.hasAny(resource.data.issuedUnitIds)
+              !getAfter(/databases/$(database)/documents/bloodBank/$(centerId)/requests/$(resource.data.requestId)).data.allocatedUnitIds.hasAny(resource.data.issuedUnitIds) &&
+              areUnitsAvailableOrDisposed(centerId, resource.data.issuedUnitIds)
             )
           );
 
