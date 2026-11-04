@@ -152,6 +152,7 @@ export interface BloodInventoryUnit {
   status: InventoryUnitStatus;
   statusReason?: string;
   reservedForRequestId?: string;
+  isExhibitionData?: boolean;
   createdAt: string;
   updatedAt: string;
 }
@@ -239,4 +240,102 @@ export interface BloodBankMetrics {
   pendingRequests: number;
   urgentRequests: number;
   totalDistributions: number;
+}
+
+// =========================================================================
+// Phase 4B: Shared Blood Bank Network Types
+// =========================================================================
+
+export type StockSummaryKey = `${BloodGroup}_${BloodComponentType}`;
+export type AvailableStockSummary = Record<string, number>;
+
+export type CenterVerificationStatus = 'verified' | 'pending' | 'suspended';
+
+export interface CenterLocation {
+  latitude: number;
+  longitude: number;
+  geohash: string;
+}
+
+export interface CenterAddress {
+  street: string;
+  city: string;
+  state: string;
+  postalCode: string;
+  country: string;
+}
+
+export interface CenterContact {
+  phone: string;
+  emergencyPhone: string;
+  email: string;
+  operatingHours: string;
+}
+
+/**
+ * Blood Bank Center (Public Directory Metadata & Aggregate Stock Summary)
+ * Stored at bloodBank/{centerId}
+ */
+export interface BloodBankCenter {
+  id: string; // centerId
+  name: string;
+  licenseNumber: string;
+  verificationStatus: CenterVerificationStatus;
+  address: CenterAddress;
+  location: CenterLocation;
+  contact: CenterContact;
+  availableStockSummary: AvailableStockSummary;
+  isExhibitionCenter: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type NetworkRequestType = 'targeted' | 'shortage_broadcast';
+export type RequesterRole = 'patient' | 'doctor';
+export type NetworkRequestStatus = 
+  | 'submitted'
+  | 'accepted'
+  | 'reserved'
+  | 'dispatched'
+  | 'fulfilled'
+  | 'rejected'
+  | 'cancelled'
+  | 'expired';
+
+export interface NetworkDeliveryAddress {
+  hospitalOrFacilityName: string;
+  departmentOrWard?: string;
+  city: string;
+  contactPhone: string;
+}
+
+/**
+ * Root-level Network Blood Request
+ * Stored at /networkRequests/{requestId}
+ */
+export interface NetworkBloodRequest {
+  id: string;
+  requestType: NetworkRequestType;
+  requesterUid: string;
+  requesterRole: RequesterRole;
+  requesterName: string;
+  hospitalOrganization?: string;
+  patientIdentifier?: string;
+  targetCenterId?: string;
+  acceptedCenterId?: string;
+  bloodGroup: BloodGroup;
+  componentType: BloodComponentType;
+  quantityUnits: number;
+  urgency: RequestUrgency;
+  requiredByDate: string; // ISO 8601
+  deliveryAddress: NetworkDeliveryAddress;
+  status: NetworkRequestStatus;
+  clinicalIndication?: string;
+  rejectionReason?: string;
+  assignedUnitIds?: string[];
+  fulfilledUnitIds?: string[];
+  authorizedStaffUid?: string;
+  isExhibitionData?: boolean;
+  createdAt: string;
+  updatedAt: string;
 }

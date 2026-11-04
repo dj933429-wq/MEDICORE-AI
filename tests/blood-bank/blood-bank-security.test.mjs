@@ -2246,6 +2246,223 @@ async function runBloodBankSecuritySuite() {
     }
   });
 
+  // =========================================================================
+  // Category L: Shared Blood Bank Network & Request Security (Phase 4B)
+  // Public Center Discovery, Available Stock Summary & Network Requests
+  // =========================================================================
+  console.log('\n--- Category L: Shared Blood Bank Network & Request Security (Phase 4B) ---');
+
+  const patient2 = testEnv.authenticatedContext('patient_carol', { role: 'patient' }).firestore();
+
+  await testEnv.withSecurityRulesDisabled(async (context) => {
+    const adminDb = context.firestore();
+
+    // 1. Setup Center Document with AvailableStockSummary
+    await setDoc(doc(adminDb, 'bloodBank', 'center-primary'), {
+      id: 'center-primary',
+      name: 'Metropolis Blood Center',
+      licenseNumber: 'BB-LIC-9988',
+      verificationStatus: 'verified',
+      availableStockSummary: {
+        'O+_whole_blood': 10,
+        'A+_platelets': 5,
+      },
+      updatedAt: '2026-03-01T10:00:00Z',
+    });
+
+    // 2. Setup a Rejected Targeted Request for Broadcast Conversion Test
+    await setDoc(doc(adminDb, 'networkRequests', 'netreq_l_rejected'), {
+      id: 'netreq_l_rejected',
+      requestType: 'targeted',
+      targetCenterId: 'center-primary',
+      requesterUid: 'patient_alice',
+      requesterRole: 'patient',
+      requesterName: 'Alice Patient',
+      bloodGroup: 'O+',
+      componentType: 'whole_blood',
+      quantityUnits: 2,
+      urgency: 'urgent',
+      status: 'rejected',
+      rejectionReason: 'Stock reserved for local emergency surgery',
+      createdAt: '2026-03-01T10:00:00Z',
+      updatedAt: '2026-03-01T10:00:00Z',
+    });
+  });
+
+  // L1-L4: Public Center Directory and Stock Summary Permissions
+  await test('L1: Patient and Doctor can read public center directory and availableStockSummary', async () => {
+    await assertSucceeds(getDoc(doc(patient, 'bloodBank', 'center-primary')));
+    await assertSucceeds(getDoc(doc(doctor, 'bloodBank', 'center-primary')));
+  });
+
+  await test('L2: Unauthenticated user denied read on public center directory', async () => {
+    await assertFails(getDoc(doc(unauth, 'bloodBank', 'center-primary')));
+  });
+
+  await test('L3: Blood Bank staff can update availableStockSummary on center document', async () => {
+    await assertSucceeds(updateDoc(doc(staff, 'bloodBank', 'center-primary'), {
+      availableStockSummary: {
+        'O+_whole_blood': 8,
+        'A+_platelets': 5,
+      },
+      updatedAt: '2026-03-01T12:00:00Z',
+    }));
+  });
+
+  await test('L4: Doctor or Patient denied update on center metadata or stock summary', async () => {
+    await assertFails(updateDoc(doc(doctor, 'bloodBank', 'center-primary'), {
+      availableStockSummary: { 'O+_whole_blood': 0 },
+      updatedAt: '2026-03-01T12:00:00Z',
+    }));
+    await assertFails(updateDoc(doc(patient, 'bloodBank', 'center-primary'), {
+      availableStockSummary: { 'O+_whole_blood': 0 },
+      updatedAt: '2026-03-01T12:00:00Z',
+    }));
+  });
+
+  await test('L5: Blood Bank staff denied modifying center immutable identity/license fields', async () => {
+    await assertFails(updateDoc(doc(staff, 'bloodBank', 'center-primary'), {
+      licenseNumber: 'ALTERED_LIC_NUMBER',
+      updatedAt: '2026-03-01T12:00:00Z',
+    }));
+  });
+
+  // L6-L10: Network Blood Request Creation and Constraint Rules
+  await test('L6: Patient can create a valid targeted network request bound to their own UID', async () => {
+    await assertSucceeds(setDoc(doc(patient, 'networkRequests', 'netreq_l_patient'), {
+      id: 'netreq_l_patient',
+      requestType: 'targeted',
+      targetCenterId: 'center-primary',
+      requesterUid: 'patient_alice',
+      requesterRole: 'patient',
+      requesterName: 'Alice Patient',
+      bloodGroup: 'O+',
+      componentType: 'whole_blood',
+      quantityUnits: 1,
+      urgency: 'urgent',
+      status: 'submitted',
+      createdAt: '2026-03-01T10:00:00Z',
+      updatedAt: '2026-03-01T10:00:00Z',
+    }));
+  });
+
+  await test('L7: Doctor can create a valid shortage broadcast request bound to their own UID', async () => {
+    await assertSucceeds(setDoc(doc(doctor, 'networkRequests', 'netreq_l_doctor'), {
+      id: 'netreq_l_doctor',
+      requestType: 'shortage_broadcast',
+      requesterUid: 'doctor_bob',
+      requesterRole: 'doctor',
+      requesterName: 'Dr. Bob',
+      bloodGroup: 'A+',
+      componentType: 'platelets',
+      quantityUnits: 3,
+      urgency: 'emergency_stat',
+      status: 'submitted',
+      createdAt: '2026-03-01T10:00:00Z',
+      updatedAt: '2026-03-01T10:00:00Z',
+    }));
+  });
+
+  await test('L8: Patient denied creating network request with forged requesterUid', async () => {
+    await assertFails(setDoc(doc(patient, 'networkRequests', 'netreq_l_forged'), {
+      id: 'netreq_l_forged',
+      requestType: 'shortage_broadcast',
+      requesterUid: 'other_victim_uid',
+      requesterRole: 'patient',
+      requesterName: 'Forged User',
+      bloodGroup: 'O+',
+      componentType: 'whole_blood',
+      quantityUnits: 1,
+      urgency: 'routine',
+      status: 'submitted',
+      createdAt: '2026-03-01T10:00:00Z',
+      updatedAt: '2026-03-01T10:00:00Z',
+    }));
+  });
+
+  await test('L9: Pharmacist or Admin denied creating network requests', async () => {
+    await assertFails(setDoc(doc(pharmacist, 'networkRequests', 'netreq_l_pharm'), {
+      id: 'netreq_l_pharm',
+      requestType: 'shortage_broadcast',
+      requesterUid: 'pharm_1',
+      requesterRole: 'pharmacist',
+      requesterName: 'Pharmacist 1',
+      bloodGroup: 'O+',
+      componentType: 'whole_blood',
+      quantityUnits: 1,
+      urgency: 'routine',
+      status: 'submitted',
+      createdAt: '2026-03-01T10:00:00Z',
+      updatedAt: '2026-03-01T10:00:00Z',
+    }));
+  });
+
+  await test('L10: Network request create rejected if status is not "submitted" (e.g. attempting to start as accepted/reserved)', async () => {
+    await assertFails(setDoc(doc(patient, 'networkRequests', 'netreq_l_bad_status'), {
+      id: 'netreq_l_bad_status',
+      requestType: 'shortage_broadcast',
+      requesterUid: 'patient_alice',
+      requesterRole: 'patient',
+      requesterName: 'Alice Patient',
+      bloodGroup: 'O+',
+      componentType: 'whole_blood',
+      quantityUnits: 1,
+      urgency: 'routine',
+      status: 'accepted',
+      acceptedCenterId: 'center-primary',
+      createdAt: '2026-03-01T10:00:00Z',
+      updatedAt: '2026-03-01T10:00:00Z',
+    }));
+  });
+
+  await test('L11: Targeted request create rejected if targeting nonexistent center', async () => {
+    await assertFails(setDoc(doc(patient, 'networkRequests', 'netreq_l_nonexistent_center'), {
+      id: 'netreq_l_nonexistent_center',
+      requestType: 'targeted',
+      targetCenterId: 'NONEXISTENT_CENTER_ID',
+      requesterUid: 'patient_alice',
+      requesterRole: 'patient',
+      requesterName: 'Alice Patient',
+      bloodGroup: 'O+',
+      componentType: 'whole_blood',
+      quantityUnits: 1,
+      urgency: 'routine',
+      status: 'submitted',
+      createdAt: '2026-03-01T10:00:00Z',
+      updatedAt: '2026-03-01T10:00:00Z',
+    }));
+  });
+
+  // L12-L15: Reading and Lifecycle Transitions
+  await test('L12: Non-requester patient denied reading another patient network request', async () => {
+    await assertFails(getDoc(doc(patient2, 'networkRequests', 'netreq_l_patient')));
+  });
+
+  await test('L13: Requester can cancel their own "submitted" network request', async () => {
+    await assertSucceeds(updateDoc(doc(patient, 'networkRequests', 'netreq_l_patient'), {
+      status: 'cancelled',
+      updatedAt: '2026-03-01T11:00:00Z',
+    }));
+  });
+
+  await test('L14: Blood Bank staff can claim/accept a submitted network broadcast request', async () => {
+    await assertSucceeds(updateDoc(doc(staff, 'networkRequests', 'netreq_l_doctor'), {
+      status: 'accepted',
+      acceptedCenterId: 'center-primary',
+      authorizedStaffUid: 'staff_bloodbank_1',
+      updatedAt: '2026-03-01T11:00:00Z',
+    }));
+  });
+
+  await test('L15: Requester can convert a rejected targeted request into shortage broadcast', async () => {
+    await assertSucceeds(updateDoc(doc(patient, 'networkRequests', 'netreq_l_rejected'), {
+      status: 'submitted',
+      requestType: 'shortage_broadcast',
+      targetCenterId: null,
+      updatedAt: '2026-03-01T11:00:00Z',
+    }));
+  });
+
   // Summary
   console.log('\n================================================================');
   const passCount = results.filter((r) => r.status === 'PASS').length;
@@ -2264,4 +2481,5 @@ runBloodBankSecuritySuite().catch((err) => {
   console.error('Test Suite encountered fatal error:', err);
   process.exit(1);
 });
+
 

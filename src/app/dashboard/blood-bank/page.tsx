@@ -12,6 +12,8 @@ import {
   BloodBankAuditEvent,
   InventoryUnitStatus,
   RequestStatus,
+  BloodBankCenter,
+  NetworkBloodRequest,
 } from '@/lib/blood-bank/types';
 import {
   fetchDonors,
@@ -28,7 +30,12 @@ import {
   updateRequestStatus,
   createDistribution,
   calculateMetrics,
+  fetchPublicBloodBankCenters,
+  fetchNetworkBloodRequests,
+  acceptNetworkBloodRequest,
+  rejectNetworkBloodRequest,
 } from '@/lib/blood-bank/firestore-service';
+import { seedExhibitionNetworkData } from '@/lib/blood-bank/exhibition-data';
 
 import AccessDenied from './components/AccessDenied';
 import OverviewTab from './components/OverviewTab';
@@ -38,6 +45,7 @@ import InventoryTab from './components/InventoryTab';
 import RequestsTab from './components/RequestsTab';
 import DistributionTab from './components/DistributionTab';
 import ReportsTab from './components/ReportsTab';
+import NetworkTab from './components/NetworkTab';
 
 export default function BloodBankPage() {
   const router = useRouter();
@@ -54,6 +62,8 @@ export default function BloodBankPage() {
   const [requests, setRequests] = useState<BloodRequest[]>([]);
   const [distributions, setDistributions] = useState<BloodDistribution[]>([]);
   const [auditLogs, setAuditLogs] = useState<BloodBankAuditEvent[]>([]);
+  const [networkRequests, setNetworkRequests] = useState<NetworkBloodRequest[]>([]);
+  const [bloodBankCenters, setBloodBankCenters] = useState<BloodBankCenter[]>([]);
 
   // Modals state
   const [activeModal, setActiveModal] = useState<string | null>(null);
@@ -63,13 +73,15 @@ export default function BloodBankPage() {
     try {
       setDataLoading(true);
       setErrorMessage(null);
-      const [dList, donList, invList, reqList, distList, logList] = await Promise.all([
+      const [dList, donList, invList, reqList, distList, logList, netReqList, centersList] = await Promise.all([
         fetchDonors(),
         fetchDonations(),
         fetchInventory(),
         fetchRequests(),
         fetchDistributions(),
         fetchAuditLogs(),
+        fetchNetworkBloodRequests().catch(() => []),
+        fetchPublicBloodBankCenters().catch(() => []),
       ]);
       setDonors(dList);
       setDonations(donList);
@@ -77,6 +89,8 @@ export default function BloodBankPage() {
       setRequests(reqList);
       setDistributions(distList);
       setAuditLogs(logList);
+      setNetworkRequests(netReqList);
+      setBloodBankCenters(centersList);
     } catch (err: unknown) {
       console.error('Failed to load blood bank data:', err);
       const msg = err instanceof Error ? err.message : 'Failed to retrieve blood bank records';
@@ -121,6 +135,7 @@ export default function BloodBankPage() {
   // Tab definitions
   const tabs = [
     { id: 'overview', label: 'Overview' },
+    { id: 'network', label: `Shared Network (${networkRequests.length})` },
     { id: 'donors', label: `Donors (${donors.length})` },
     { id: 'donations', label: `Donations (${donations.length})` },
     { id: 'inventory', label: `Inventory (${inventory.length})` },
@@ -130,6 +145,21 @@ export default function BloodBankPage() {
   ];
 
   // Action handlers
+  const handleAcceptNetworkRequest = async (requestId: string, centerId: string, assignedUnitIds: string[]) => {
+    await acceptNetworkBloodRequest(requestId, centerId, assignedUnitIds, { uid: user.uid, email: user.email || undefined });
+    await loadAllData();
+  };
+
+  const handleRejectNetworkRequest = async (requestId: string, centerId: string, reason: string) => {
+    await rejectNetworkBloodRequest(requestId, centerId, reason, { uid: user.uid, email: user.email || undefined });
+    await loadAllData();
+  };
+
+  const handleSeedExhibition = async () => {
+    await seedExhibitionNetworkData();
+    await loadAllData();
+  };
+
   const handleRegisterDonor = async (payload: Parameters<typeof createDonor>[0]) => {
     await createDonor(payload, { uid: user.uid, email: user.email || undefined });
     await loadAllData();
@@ -259,6 +289,20 @@ export default function BloodBankPage() {
             recentRequests={requests}
             onNavigateTab={setActiveTab}
             onOpenModal={setActiveModal}
+          />
+        )}
+
+        {activeTab === 'network' && (
+          <NetworkTab
+            networkRequests={networkRequests}
+            bloodBankCenters={bloodBankCenters}
+            inventory={inventory}
+            currentCenterId="center-metropolis-central"
+            currentUser={{ uid: user.uid, email: user.email || undefined }}
+            onRefresh={loadAllData}
+            onAcceptRequest={handleAcceptNetworkRequest}
+            onRejectRequest={handleRejectNetworkRequest}
+            onSeedExhibition={handleSeedExhibition}
           />
         )}
 

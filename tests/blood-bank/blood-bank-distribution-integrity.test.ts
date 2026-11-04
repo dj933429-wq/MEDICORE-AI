@@ -26,12 +26,18 @@
 import { initializeTestEnvironment } from '@firebase/rules-unit-testing';
 import { readFileSync } from 'fs';
 import { doc, getDoc, setDoc, collection, getDocs, type Firestore } from 'firebase/firestore';
-import type { BloodDistribution } from '../../src/lib/blood-bank/types';
+import type { BloodDistribution, AvailableStockSummary } from '../../src/lib/blood-bank/types';
 import {
   createDistribution,
   deliverDistribution,
   cancelDistribution,
   updateRequestStatus,
+  createNetworkBloodRequest,
+  acceptNetworkBloodRequest,
+  rejectNetworkBloodRequest,
+  cancelNetworkBloodRequest,
+  convertRejectedToBroadcast,
+  updateBloodBankCenterStockSummary,
 } from '../../src/lib/blood-bank/firestore-service';
 import { BloodBankValidationError } from '../../src/lib/blood-bank/validation';
 
@@ -63,9 +69,24 @@ async function runRealDistributionTransactionSuite() {
     },
   });
 
+  // Clear emulator state for repeatable test runs
+  await testEnv.clearFirestore();
+
   const staffUid = 'staff_bloodbank_tx_1';
   const staff = testEnv.authenticatedContext(staffUid, { role: 'blood_bank' }).firestore();
   const actor = { uid: staffUid, email: 'staff_tx@medicore.internal' };
+
+  const patientUid = 'patient_tx_network_1';
+  const patient = testEnv.authenticatedContext(patientUid, { role: 'patient' }).firestore();
+  const patientActor = { uid: patientUid, email: 'patient_net@medicore.internal', role: 'patient' as const };
+
+  const doctorUid = 'doctor_tx_network_1';
+  const doctor = testEnv.authenticatedContext(doctorUid, { role: 'doctor' }).firestore();
+  const doctorActor = { uid: doctorUid, email: 'dr_net@medicore.internal', role: 'doctor' as const };
+
+  const center2StaffUid = 'staff_center2_tx';
+  const center2Staff = testEnv.authenticatedContext(center2StaffUid, { role: 'blood_bank' }).firestore();
+  const center2Actor = { uid: center2StaffUid, email: 'staff2_tx@medicore.internal' };
 
   let passed = 0;
   let failed = 0;
@@ -86,6 +107,35 @@ async function runRealDistributionTransactionSuite() {
   // Pre-seed baseline test data using admin bypass
   await testEnv.withSecurityRulesDisabled(async (context) => {
     const adminDb = context.firestore();
+
+    // Seed center directories
+    await setDoc(doc(adminDb, 'bloodBank', 'center-primary'), {
+      id: 'center-primary',
+      name: 'Metropolis Blood Center',
+      licenseNumber: 'LIC-BB-001',
+      verificationStatus: 'verified',
+      location: { latitude: 40.7128, longitude: -74.006, geohash: 'dr5reg' },
+      address: { street: '100 Health Ave', city: 'Metropolis', postalCode: '10001', state: 'NY', country: 'US' },
+      contact: { phone: '+1 555-0100', emergencyPhone: '+1 555-0199', email: 'bb1@example.com', operatingHours: '24/7' },
+      availableStockSummary: { 'O+_whole_blood': 10 },
+      isExhibitionCenter: false,
+      createdAt: '2026-02-01T00:00:00Z',
+      updatedAt: '2026-02-01T00:00:00Z',
+    });
+
+    await setDoc(doc(adminDb, 'bloodBank', 'center-secondary'), {
+      id: 'center-secondary',
+      name: 'St. Jude Regional Blood Bank',
+      licenseNumber: 'LIC-BB-002',
+      verificationStatus: 'verified',
+      location: { latitude: 40.7306, longitude: -73.9352, geohash: 'dr5ru2' },
+      address: { street: '200 Mercy Blvd', city: 'Metropolis', postalCode: '10002', state: 'NY', country: 'US' },
+      contact: { phone: '+1 555-0200', emergencyPhone: '+1 555-0299', email: 'bb2@example.com', operatingHours: '24/7' },
+      availableStockSummary: { 'A+_packed_red_cells': 5 },
+      isExhibitionCenter: false,
+      createdAt: '2026-02-01T00:00:00Z',
+      updatedAt: '2026-02-01T00:00:00Z',
+    });
 
     // Seed donor and donation
     await setDoc(doc(adminDb, 'bloodBank', 'center-primary', 'donors', 'donor_base'), {
@@ -1668,6 +1718,403 @@ async function runRealDistributionTransactionSuite() {
     // Verify final request status in Firestore
     const reqFinal = await getDoc(doc(staff, 'bloodBank', 'center-primary', 'requests', 'req_cancel_active_alloc'));
     if (reqFinal.data()?.status !== 'cancelled') throw new Error('Request should now be cancelled');
+  });
+
+  // ---------------------------------------------------------------------------
+  // TEST 21: Patient can create targeted network blood request; center accepts atomically
+  // ---------------------------------------------------------------------------
+  await test('21. Patient creates targeted network request; blood bank accepts it, transitioning inventory unit to reserved and locking request atomically', async () => {
+    // 1. Seed inventory unit in center-primary
+    await seedTestRecords([
+      [
+        'inventory',
+        'unit_net_tx_21',
+        {
+          id: 'unit_net_tx_21',
+          centerId: 'center-primary',
+          donationId: 'don_base',
+          donorId: 'donor_base',
+          bloodGroup: 'O+',
+          componentType: 'whole_blood',
+          collectionDate: '2026-02-01T10:00:00Z',
+          expiryDate: '2026-03-07T10:00:00Z',
+          volumeMl: 450,
+          storageLocation: 'Shelf-Net-1',
+          status: 'available',
+          reservedForRequestId: null,
+          createdAt: '2026-02-01T10:00:00Z',
+          updatedAt: '2026-02-01T10:00:00Z',
+        },
+      ],
+    ]);
+
+    // 2. Patient creates targeted request
+    const netReq = await createNetworkBloodRequest(
+      {
+        requesterUid: patientUid,
+        requesterRole: 'patient',
+        requesterName: 'Alice Patient',
+        requestType: 'targeted',
+        targetCenterId: 'center-primary',
+        bloodGroup: 'O+',
+        componentType: 'whole_blood',
+        quantityUnits: 1,
+        urgency: 'routine',
+        requiredByDate: '2026-03-01T00:00:00Z',
+        deliveryAddress: {
+          hospitalOrFacilityName: 'General Hospital',
+          departmentOrWard: 'ICU',
+          city: 'Metropolis',
+          contactPhone: '+1 555-1234',
+        },
+      },
+      patientActor,
+      'req_net_tx_21',
+      patient as unknown as Firestore
+    );
+
+    if (netReq.status !== 'submitted') throw new Error('Expected initial status to be submitted');
+
+    // 3. Blood bank accepts request
+    const accepted = await acceptNetworkBloodRequest(
+      'req_net_tx_21',
+      'center-primary',
+      ['unit_net_tx_21'],
+      actor,
+      staff as unknown as Firestore
+    );
+
+    if (accepted.status !== 'reserved') throw new Error('Expected accepted status to be reserved');
+    if (accepted.acceptedCenterId !== 'center-primary') throw new Error('Expected acceptedCenterId to be center-primary');
+    if (!accepted.assignedUnitIds?.includes('unit_net_tx_21')) throw new Error('Expected assignedUnitIds to contain unit');
+
+    // 4. Verify post-transaction state in Firestore
+    const unitDoc = await getDoc(doc(staff, 'bloodBank', 'center-primary', 'inventory', 'unit_net_tx_21'));
+    if (unitDoc.data()?.status !== 'reserved') throw new Error('Unit status must be reserved in Firestore');
+    if (unitDoc.data()?.reservedForRequestId !== 'req_net_tx_21') throw new Error('Unit reservedForRequestId must be req_net_tx_21');
+
+    const reqDoc = await getDoc(doc(patient, 'networkRequests', 'req_net_tx_21'));
+    if (reqDoc.data()?.status !== 'reserved') throw new Error('Request status must be reserved in Firestore');
+    if (reqDoc.data()?.acceptedCenterId !== 'center-primary') throw new Error('Request acceptedCenterId mismatch');
+  });
+
+  // ---------------------------------------------------------------------------
+  // TEST 22: Shortage broadcast anti-collision lock with concurrent acceptance
+  // ---------------------------------------------------------------------------
+  await test('22. Shortage broadcast anti-collision lock: concurrent acceptance by two blood bank centers resolves with exactly 1 winner', async () => {
+    // 1. Seed available inventory in center-primary and center-secondary
+    await testEnv.withSecurityRulesDisabled(async (context) => {
+      const adminDb = context.firestore();
+      await setDoc(doc(adminDb, 'bloodBank', 'center-primary', 'inventory', 'unit_collision_c1'), {
+        id: 'unit_collision_c1',
+        centerId: 'center-primary',
+        donationId: 'don_base',
+        donorId: 'donor_base',
+        bloodGroup: 'O+',
+        componentType: 'whole_blood',
+        collectionDate: '2026-02-01T10:00:00Z',
+        expiryDate: '2026-03-07T10:00:00Z',
+        volumeMl: 450,
+        storageLocation: 'Shelf-C1',
+        status: 'available',
+        reservedForRequestId: null,
+        createdAt: '2026-02-01T10:00:00Z',
+        updatedAt: '2026-02-01T10:00:00Z',
+      });
+      await setDoc(doc(adminDb, 'bloodBank', 'center-secondary', 'inventory', 'unit_collision_c2'), {
+        id: 'unit_collision_c2',
+        centerId: 'center-secondary',
+        donationId: 'don_base',
+        donorId: 'donor_base',
+        bloodGroup: 'O+',
+        componentType: 'whole_blood',
+        collectionDate: '2026-02-01T10:00:00Z',
+        expiryDate: '2026-03-07T10:00:00Z',
+        volumeMl: 450,
+        storageLocation: 'Shelf-C2',
+        status: 'available',
+        reservedForRequestId: null,
+        createdAt: '2026-02-01T10:00:00Z',
+        updatedAt: '2026-02-01T10:00:00Z',
+      });
+    });
+
+    // 2. Doctor creates a shortage broadcast
+    await createNetworkBloodRequest(
+      {
+        requesterUid: doctorUid,
+        requesterRole: 'doctor',
+        requesterName: 'Dr. Gregory House',
+        requestType: 'shortage_broadcast',
+        bloodGroup: 'O+',
+        componentType: 'whole_blood',
+        quantityUnits: 1,
+        urgency: 'urgent',
+        requiredByDate: '2026-03-01T00:00:00Z',
+        deliveryAddress: {
+          hospitalOrFacilityName: 'Metro Trauma Center',
+          departmentOrWard: 'OR-1',
+          city: 'Metropolis',
+          contactPhone: '+1 555-9999',
+        },
+      },
+      doctorActor,
+      'req_broadcast_collision_tx',
+      doctor as unknown as Firestore
+    );
+
+    // 3. Two centers attempt to claim the broadcast concurrently
+    const p1 = acceptNetworkBloodRequest(
+      'req_broadcast_collision_tx',
+      'center-primary',
+      ['unit_collision_c1'],
+      actor,
+      staff as unknown as Firestore
+    );
+
+    const p2 = acceptNetworkBloodRequest(
+      'req_broadcast_collision_tx',
+      'center-secondary',
+      ['unit_collision_c2'],
+      center2Actor,
+      center2Staff as unknown as Firestore
+    );
+
+    const results = await Promise.allSettled([p1, p2]);
+    const fulfilled = results.filter((r) => r.status === 'fulfilled');
+    const rejected = results.filter((r) => r.status === 'rejected');
+
+    if (fulfilled.length !== 1 || rejected.length !== 1) {
+      throw new Error(`Expected exactly 1 winner and 1 rejection in race condition, got ${fulfilled.length} fulfilled and ${rejected.length} rejected`);
+    }
+
+    // 4. Verify in Firestore: winning center has reserved request, losing center unit remains available
+    const reqDoc = await getDoc(doc(doctor, 'networkRequests', 'req_broadcast_collision_tx'));
+    const winningCenterId = reqDoc.data()?.acceptedCenterId;
+    if (winningCenterId !== 'center-primary' && winningCenterId !== 'center-secondary') {
+      throw new Error('Winning center must be center-primary or center-secondary');
+    }
+
+    const losingCenterId = winningCenterId === 'center-primary' ? 'center-secondary' : 'center-primary';
+    const losingUnitId = winningCenterId === 'center-primary' ? 'unit_collision_c2' : 'unit_collision_c1';
+
+    const losingUnitDoc = await getDoc(doc(staff, 'bloodBank', losingCenterId, 'inventory', losingUnitId));
+    if (losingUnitDoc.data()?.status !== 'available') {
+      throw new Error('Losing center inventory unit must remain available without reservation lock');
+    }
+  });
+
+  // ---------------------------------------------------------------------------
+  // TEST 23: Rejection of targeted request by target center & conversion to broadcast
+  // ---------------------------------------------------------------------------
+  await test('23. Target center rejects targeted request; requester converts rejected request to shortage broadcast', async () => {
+    // 1. Patient creates targeted request for center-primary
+    await createNetworkBloodRequest(
+      {
+        requesterUid: patientUid,
+        requesterRole: 'patient',
+        requesterName: 'Alice Patient',
+        requestType: 'targeted',
+        targetCenterId: 'center-primary',
+        bloodGroup: 'O+',
+        componentType: 'whole_blood',
+        quantityUnits: 1,
+        urgency: 'routine',
+        requiredByDate: '2026-03-01T00:00:00Z',
+        deliveryAddress: {
+          hospitalOrFacilityName: 'General Hospital',
+          departmentOrWard: 'Outpatient',
+          city: 'Metropolis',
+          contactPhone: '+1 555-1234',
+        },
+      },
+      patientActor,
+      'req_targeted_reject_tx',
+      patient as unknown as Firestore
+    );
+
+    // 2. Center-primary formally rejects the request
+    const rejectedReq = await rejectNetworkBloodRequest(
+      'req_targeted_reject_tx',
+      'center-primary',
+      'Stock depleted by emergency pediatric surgeries',
+      actor,
+      staff as unknown as Firestore
+    );
+
+    if (rejectedReq.status !== 'rejected') throw new Error('Expected status to be rejected');
+    if (rejectedReq.rejectionReason !== 'Stock depleted by emergency pediatric surgeries') throw new Error('Rejection reason mismatch');
+
+    // 3. Patient converts rejected request into a shortage broadcast
+    const broadcastReq = await convertRejectedToBroadcast(
+      'req_targeted_reject_tx',
+      patientActor,
+      patient as unknown as Firestore
+    );
+
+    if (broadcastReq.status !== 'submitted') throw new Error('Expected status to be submitted after broadcast conversion');
+    if (broadcastReq.requestType !== 'shortage_broadcast') throw new Error('Expected requestType to be shortage_broadcast');
+
+    // Verify Firestore doc
+    const reqDoc = await getDoc(doc(patient, 'networkRequests', 'req_targeted_reject_tx'));
+    if (reqDoc.data()?.status !== 'submitted') throw new Error('Firestore status mismatch');
+    if (reqDoc.data()?.requestType !== 'shortage_broadcast') throw new Error('Firestore requestType mismatch');
+  });
+
+  // ---------------------------------------------------------------------------
+  // TEST 24: Requester cancels submitted network request; unauthorized cancellation rejected
+  // ---------------------------------------------------------------------------
+  await test('24. Original requester cancels submitted network request; unauthorized cancellation rejected', async () => {
+    // 1. Patient creates request
+    await createNetworkBloodRequest(
+      {
+        requesterUid: patientUid,
+        requesterRole: 'patient',
+        requesterName: 'Alice Patient',
+        requestType: 'targeted',
+        targetCenterId: 'center-primary',
+        bloodGroup: 'O+',
+        componentType: 'whole_blood',
+        quantityUnits: 1,
+        urgency: 'routine',
+        requiredByDate: '2026-03-01T00:00:00Z',
+        deliveryAddress: {
+          hospitalOrFacilityName: 'Clinic A',
+          departmentOrWard: 'Ward 2',
+          city: 'Metropolis',
+          contactPhone: '+1 555-1234',
+        },
+      },
+      patientActor,
+      'req_cancel_perm_tx',
+      patient as unknown as Firestore
+    );
+
+    // 2. Doctor attempts to cancel patient request -> must fail
+    let doctorCancelFailed = false;
+    try {
+      await cancelNetworkBloodRequest(
+        'req_cancel_perm_tx',
+        doctorActor,
+        doctor as unknown as Firestore
+      );
+    } catch {
+      doctorCancelFailed = true;
+    }
+    if (!doctorCancelFailed) throw new Error('Non-requester must not be able to cancel request');
+
+    // 3. Patient cancels own request -> succeeds
+    const cancelled = await cancelNetworkBloodRequest(
+      'req_cancel_perm_tx',
+      patientActor,
+      patient as unknown as Firestore
+    );
+    if (cancelled.status !== 'cancelled') throw new Error('Expected status to be cancelled');
+
+    const reqDoc = await getDoc(doc(patient, 'networkRequests', 'req_cancel_perm_tx'));
+    if (reqDoc.data()?.status !== 'cancelled') throw new Error('Status in Firestore must be cancelled');
+  });
+
+  // ---------------------------------------------------------------------------
+  // TEST 25: Accepting network request with unavailable inventory fails cleanly
+  // ---------------------------------------------------------------------------
+  await test('25. Accepting network request with un-available inventory fails cleanly with zero side-effects', async () => {
+    // 1. Seed quarantined inventory unit
+    await seedTestRecords([
+      [
+        'inventory',
+        'unit_quarantine_net_tx',
+        {
+          id: 'unit_quarantine_net_tx',
+          centerId: 'center-primary',
+          donationId: 'don_base',
+          donorId: 'donor_base',
+          bloodGroup: 'O+',
+          componentType: 'whole_blood',
+          collectionDate: '2026-02-01T10:00:00Z',
+          expiryDate: '2026-03-07T10:00:00Z',
+          volumeMl: 450,
+          storageLocation: 'Quarantine-Net',
+          status: 'quarantine',
+          reservedForRequestId: null,
+          createdAt: '2026-02-01T10:00:00Z',
+          updatedAt: '2026-02-01T10:00:00Z',
+        },
+      ],
+    ]);
+
+    // 2. Patient creates targeted request
+    await createNetworkBloodRequest(
+      {
+        requesterUid: patientUid,
+        requesterRole: 'patient',
+        requesterName: 'Alice Patient',
+        requestType: 'targeted',
+        targetCenterId: 'center-primary',
+        bloodGroup: 'O+',
+        componentType: 'whole_blood',
+        quantityUnits: 1,
+        urgency: 'routine',
+        requiredByDate: '2026-03-01T00:00:00Z',
+        deliveryAddress: {
+          hospitalOrFacilityName: 'General Hospital',
+          departmentOrWard: 'ICU',
+          city: 'Metropolis',
+          contactPhone: '+1 555-1234',
+        },
+      },
+      patientActor,
+      'req_fail_quarantine_tx',
+      patient as unknown as Firestore
+    );
+
+    // 3. Attempting to accept with quarantined unit fails
+    let acceptFailed = false;
+    try {
+      await acceptNetworkBloodRequest(
+        'req_fail_quarantine_tx',
+        'center-primary',
+        ['unit_quarantine_net_tx'],
+        actor,
+        staff as unknown as Firestore
+      );
+    } catch {
+      acceptFailed = true;
+    }
+    if (!acceptFailed) throw new Error('Accepting with quarantined unit must fail');
+
+    // 4. Verify request and unit are untouched
+    const reqDoc = await getDoc(doc(patient, 'networkRequests', 'req_fail_quarantine_tx'));
+    if (reqDoc.data()?.status !== 'submitted') throw new Error('Request status must remain submitted');
+
+    const unitDoc = await getDoc(doc(staff, 'bloodBank', 'center-primary', 'inventory', 'unit_quarantine_net_tx'));
+    if (unitDoc.data()?.status !== 'quarantine') throw new Error('Unit status must remain quarantine');
+  });
+
+  // ---------------------------------------------------------------------------
+  // TEST 26: Center stock summary update preserves center identity
+  // ---------------------------------------------------------------------------
+  await test('26. updateBloodBankCenterStockSummary updates stock projection while preserving immutable center identity', async () => {
+    const summary: AvailableStockSummary = {
+      'O+_whole_blood': 12,
+      'A+_platelets': 4,
+      'B-_red_blood_cells': 2,
+    };
+
+    await updateBloodBankCenterStockSummary(
+      'center-primary',
+      summary,
+      actor,
+      staff as unknown as Firestore
+    );
+
+    const centerDoc = await getDoc(doc(staff, 'bloodBank', 'center-primary'));
+    const data = centerDoc.data();
+    if (!data) throw new Error('Center doc not found');
+    if (data.availableStockSummary?.['O+_whole_blood'] !== 12) throw new Error('Stock summary count mismatch');
+    if (data.availableStockSummary?.['A+_platelets'] !== 4) throw new Error('Stock summary platelets mismatch');
+    if (data.name !== 'Metropolis Blood Center') throw new Error('Center name was corrupted');
+    if (data.licenseNumber !== 'LIC-BB-001') throw new Error('Center license was corrupted');
   });
 
   // Summary

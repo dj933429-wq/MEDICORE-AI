@@ -29,6 +29,9 @@ import {
   BloodBankAuditEvent,
   InventoryUnitStatus,
   RequestStatus,
+  NetworkBloodRequest,
+  BloodBankCenter,
+  AvailableStockSummary,
 } from './types';
 import { DEFAULT_BLOOD_BANK_CENTER_ID } from './constants';
 import {
@@ -37,6 +40,8 @@ import {
   validateInventoryUnitPayload,
   validateBloodRequestPayload,
   validateDistributionPayload,
+  validateNetworkRequestPayload,
+  validateBloodBankCenterSummary,
   isValidInventoryTransition,
   isValidRequestTransition,
   BloodBankValidationError,
@@ -941,3 +946,351 @@ export async function fetchAuditLogs(
 // =============================================================================
 
 export { calculateMetrics } from './validation';
+
+// =============================================================================
+// Phase 4B: Shared Blood Bank Network Service Layer
+// =============================================================================
+
+/**
+ * Creates a root-level network blood request (targeted or shortage broadcast)
+ */
+export async function createNetworkBloodRequest(
+  payload: Omit<NetworkBloodRequest, 'id' | 'status' | 'createdAt' | 'updatedAt'>,
+  actor: { uid: string; email?: string; role: 'patient' | 'doctor' },
+  customIdOrInstance?: string | typeof db,
+  maybeFirestoreInstance = db
+): Promise<NetworkBloodRequest> {
+  const customId = typeof customIdOrInstance === 'string' ? customIdOrInstance : undefined;
+  const firestoreInstance =
+    typeof customIdOrInstance === 'object' && customIdOrInstance !== null
+      ? (customIdOrInstance as typeof db)
+      : maybeFirestoreInstance;
+
+  const reqId = customId || `netreq_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+  const now = new Date().toISOString();
+
+  const newRequest: NetworkBloodRequest = {
+    ...payload,
+    id: reqId,
+    requesterUid: actor.uid,
+    requesterRole: actor.role,
+    status: 'submitted',
+    createdAt: now,
+    updatedAt: now,
+  };
+
+  validateNetworkRequestPayload(newRequest);
+
+  const reqRef = doc(firestoreInstance, 'networkRequests', reqId);
+  const batch = writeBatch(firestoreInstance);
+  batch.set(reqRef, newRequest);
+  await batch.commit();
+
+  return newRequest;
+}
+
+/**
+ * Claims and accepts an unassigned network request atomically, locking inventory units
+ */
+export async function acceptNetworkBloodRequest(
+  requestId: string,
+  centerId: string,
+  assignedUnitIds: string[],
+  actor: { uid: string; email?: string },
+  firestoreInstance = db
+): Promise<NetworkBloodRequest> {
+  const reqRef = doc(firestoreInstance, 'networkRequests', requestId);
+  const now = new Date().toISOString();
+  let updatedRequest: NetworkBloodRequest | undefined;
+
+  await runTransaction(firestoreInstance, async (tx) => {
+    const reqSnap = await tx.get(reqRef);
+    if (!reqSnap.exists()) {
+      throw new BloodBankValidationError(`Network request ${requestId} does not exist.`);
+    }
+
+    const reqData = reqSnap.data() as NetworkBloodRequest;
+
+    if (reqData.status !== 'submitted') {
+      throw new BloodBankValidationError(
+        `Cannot accept request ${requestId}: status is '${reqData.status}', expected 'submitted'.`
+      );
+    }
+
+    if (reqData.acceptedCenterId) {
+      throw new BloodBankValidationError(
+        `Request ${requestId} has already been claimed by center ${reqData.acceptedCenterId}.`
+      );
+    }
+
+    if (reqData.requestType === 'targeted' && reqData.targetCenterId !== centerId) {
+      throw new BloodBankValidationError(
+        `Cannot accept targeted request ${requestId}: targeted center is '${reqData.targetCenterId}', not '${centerId}'.`
+      );
+    }
+
+    if (!assignedUnitIds || assignedUnitIds.length === 0) {
+      throw new BloodBankValidationError('At least one inventory unit ID must be assigned to accept and reserve this request.');
+    }
+
+    if (assignedUnitIds.length > reqData.quantityUnits) {
+      throw new BloodBankValidationError(
+        `Cannot assign ${assignedUnitIds.length} units to request requiring ${reqData.quantityUnits} units.`
+      );
+    }
+
+    // Verify inventory units are available and belong to this center
+    const unitRefs = assignedUnitIds.map((uId) => doc(firestoreInstance, 'bloodBank', centerId, 'inventory', uId));
+    const unitSnaps = await Promise.all(unitRefs.map((ref) => tx.get(ref)));
+
+    for (let i = 0; i < unitSnaps.length; i++) {
+      const snap = unitSnaps[i];
+      if (!snap.exists()) {
+        throw new BloodBankValidationError(`Assigned unit ${assignedUnitIds[i]} does not exist in center ${centerId}.`);
+      }
+      const unitData = snap.data() as BloodInventoryUnit;
+      if (unitData.status !== 'available') {
+        throw new BloodBankValidationError(
+          `Unit ${assignedUnitIds[i]} is currently in '${unitData.status}' status (must be 'available').`
+        );
+      }
+    }
+
+    // Lock units as reserved
+    for (let i = 0; i < unitRefs.length; i++) {
+      tx.update(unitRefs[i], {
+        status: 'reserved',
+        reservedForRequestId: requestId,
+        updatedAt: now,
+      });
+    }
+
+    // Update request
+    tx.update(reqRef, {
+      status: 'reserved',
+      acceptedCenterId: centerId,
+      assignedUnitIds,
+      authorizedStaffUid: actor.uid,
+      updatedAt: now,
+    });
+
+    updatedRequest = {
+      ...reqData,
+      status: 'reserved',
+      acceptedCenterId: centerId,
+      assignedUnitIds,
+      authorizedStaffUid: actor.uid,
+      updatedAt: now,
+    };
+  });
+
+  return updatedRequest!;
+}
+
+/**
+ * Rejects a targeted network request formally
+ */
+export async function rejectNetworkBloodRequest(
+  requestId: string,
+  centerId: string,
+  rejectionReason: string,
+  actor: { uid: string; email?: string },
+  firestoreInstance = db
+): Promise<NetworkBloodRequest> {
+  const reqRef = doc(firestoreInstance, 'networkRequests', requestId);
+  const now = new Date().toISOString();
+  let updatedRequest: NetworkBloodRequest | undefined;
+
+  await runTransaction(firestoreInstance, async (tx) => {
+    const reqSnap = await tx.get(reqRef);
+    if (!reqSnap.exists()) {
+      throw new BloodBankValidationError(`Network request ${requestId} does not exist.`);
+    }
+
+    const reqData = reqSnap.data() as NetworkBloodRequest;
+
+    if (reqData.status !== 'submitted') {
+      throw new BloodBankValidationError(
+        `Cannot reject request ${requestId}: status is '${reqData.status}', expected 'submitted'.`
+      );
+    }
+
+    if (reqData.requestType !== 'targeted' || reqData.targetCenterId !== centerId) {
+      throw new BloodBankValidationError(
+        `Only the targeted blood bank (${reqData.targetCenterId || 'none'}) can formally reject a targeted request.`
+      );
+    }
+
+    tx.update(reqRef, {
+      status: 'rejected',
+      rejectionReason: rejectionReason || 'Target blood bank unable to fulfill request.',
+      authorizedStaffUid: actor.uid,
+      updatedAt: now,
+    });
+
+    updatedRequest = {
+      ...reqData,
+      status: 'rejected',
+      rejectionReason: rejectionReason || 'Target blood bank unable to fulfill request.',
+      authorizedStaffUid: actor.uid,
+      updatedAt: now,
+    };
+  });
+
+  return updatedRequest!;
+}
+
+/**
+ * Cancels a submitted network request by original requester
+ */
+export async function cancelNetworkBloodRequest(
+  requestId: string,
+  actor: { uid: string },
+  firestoreInstance = db
+): Promise<NetworkBloodRequest> {
+  const reqRef = doc(firestoreInstance, 'networkRequests', requestId);
+  const now = new Date().toISOString();
+  let updatedRequest: NetworkBloodRequest | undefined;
+
+  await runTransaction(firestoreInstance, async (tx) => {
+    const reqSnap = await tx.get(reqRef);
+    if (!reqSnap.exists()) {
+      throw new BloodBankValidationError(`Network request ${requestId} does not exist.`);
+    }
+
+    const reqData = reqSnap.data() as NetworkBloodRequest;
+
+    if (reqData.requesterUid !== actor.uid) {
+      throw new BloodBankValidationError('Only the original requester can cancel this request.');
+    }
+
+    if (reqData.status !== 'submitted') {
+      throw new BloodBankValidationError(
+        `Cannot cancel request ${requestId} with status '${reqData.status}'. Only unaccepted 'submitted' requests can be cancelled directly by requester.`
+      );
+    }
+
+    tx.update(reqRef, {
+      status: 'cancelled',
+      updatedAt: now,
+    });
+
+    updatedRequest = {
+      ...reqData,
+      status: 'cancelled',
+      updatedAt: now,
+    };
+  });
+
+  return updatedRequest!;
+}
+
+/**
+ * Converts a rejected targeted request into an open shortage broadcast
+ */
+export async function convertRejectedToBroadcast(
+  requestId: string,
+  actor: { uid: string },
+  firestoreInstance = db
+): Promise<NetworkBloodRequest> {
+  const reqRef = doc(firestoreInstance, 'networkRequests', requestId);
+  const now = new Date().toISOString();
+  let updatedRequest: NetworkBloodRequest | undefined;
+
+  await runTransaction(firestoreInstance, async (tx) => {
+    const reqSnap = await tx.get(reqRef);
+    if (!reqSnap.exists()) {
+      throw new BloodBankValidationError(`Network request ${requestId} does not exist.`);
+    }
+
+    const reqData = reqSnap.data() as NetworkBloodRequest;
+
+    if (reqData.requesterUid !== actor.uid) {
+      throw new BloodBankValidationError('Only the original requester can convert this request.');
+    }
+
+    if (reqData.status !== 'rejected') {
+      throw new BloodBankValidationError(
+        `Cannot convert request ${requestId}: status is '${reqData.status}', expected 'rejected'.`
+      );
+    }
+
+    tx.update(reqRef, {
+      status: 'submitted',
+      requestType: 'shortage_broadcast',
+      targetCenterId: null,
+      updatedAt: now,
+    });
+
+    updatedRequest = {
+      ...reqData,
+      status: 'submitted',
+      requestType: 'shortage_broadcast',
+      targetCenterId: undefined,
+      updatedAt: now,
+    };
+  });
+
+  return updatedRequest!;
+}
+
+/**
+ * Updates a blood bank center's available stock summary projection
+ */
+export async function updateBloodBankCenterStockSummary(
+  centerId: string,
+  summary: AvailableStockSummary,
+  actor: { uid: string },
+  firestoreInstance = db
+): Promise<void> {
+  validateBloodBankCenterSummary(summary);
+  const centerRef = doc(firestoreInstance, 'bloodBank', centerId);
+  const now = new Date().toISOString();
+  await runTransaction(firestoreInstance, async (tx) => {
+    const snap = await tx.get(centerRef);
+    if (!snap.exists()) {
+      throw new BloodBankValidationError(`Center document ${centerId} does not exist.`);
+    }
+    tx.update(centerRef, {
+      availableStockSummary: summary,
+      updatedAt: now,
+    });
+  });
+}
+
+/**
+ * Fetches public blood bank centers for network stock discovery
+ */
+export async function fetchPublicBloodBankCenters(firestoreInstance = db): Promise<BloodBankCenter[]> {
+  const centersRef = collection(firestoreInstance, 'bloodBank');
+  const snap = await getDocs(centersRef);
+  return snap.docs
+    .map((d) => d.data() as BloodBankCenter)
+    .filter((c) => c && c.id && c.name);
+}
+
+/**
+ * Fetches network blood requests with optional filters
+ */
+export async function fetchNetworkBloodRequests(
+  filter?: { requesterUid?: string; centerId?: string; status?: string },
+  firestoreInstance = db
+): Promise<NetworkBloodRequest[]> {
+  const reqsRef = collection(firestoreInstance, 'networkRequests');
+  const snap = await getDocs(reqsRef);
+  let requests = snap.docs.map((d) => d.data() as NetworkBloodRequest);
+
+  if (filter?.requesterUid) {
+    requests = requests.filter((r) => r.requesterUid === filter.requesterUid);
+  }
+  if (filter?.centerId) {
+    requests = requests.filter(
+      (r) => r.targetCenterId === filter.centerId || r.acceptedCenterId === filter.centerId || r.requestType === 'shortage_broadcast'
+    );
+  }
+  if (filter?.status) {
+    requests = requests.filter((r) => r.status === filter.status);
+  }
+
+  return requests;
+}

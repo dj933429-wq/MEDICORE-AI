@@ -18,6 +18,8 @@ import {
   validateInventoryUnitPayload,
   validateBloodRequestPayload,
   validateDistributionPayload,
+  validateNetworkRequestPayload,
+  validateBloodBankCenterSummary,
   calculateMetrics,
 } from '../../src/lib/blood-bank/validation.ts';
 
@@ -252,6 +254,116 @@ assert(metrics.availableUnits === 1, 'Counts available units: 1');
 assert(metrics.quarantinedUnits === 1, 'Counts quarantined units: 1');
 assert(metrics.urgentRequests === 1, 'Counts urgent/STAT requests: 1');
 assert(metrics.totalDistributions === 1, 'Counts total distributions: 1');
+
+// 9. Phase 4B Network Request & Center Stock Summary Validation
+console.log('\n--- Suite 9: Phase 4B Network Requests & Stock Summary Validation ---');
+const validTargetedReq = {
+  id: 'netreq_001',
+  requestType: 'targeted',
+  targetCenterId: 'center-primary',
+  requesterUid: 'doc_user_1',
+  requesterRole: 'doctor',
+  requesterName: 'Dr. John Smith',
+  hospitalOrganization: 'General Hospital',
+  bloodGroup: 'O+',
+  componentType: 'whole_blood',
+  quantityUnits: 2,
+  urgency: 'urgent',
+  requiredByDate: '2026-03-10T12:00:00Z',
+  deliveryAddress: {
+    hospitalOrFacilityName: 'General Hospital Trauma Center',
+    departmentOrWard: 'ICU Ward 3',
+    city: 'Metropolis',
+    contactPhone: '555-0199',
+  },
+  status: 'submitted',
+};
+
+const validBroadcastReq = {
+  ...validTargetedReq,
+  id: 'netreq_002',
+  requestType: 'shortage_broadcast',
+  targetCenterId: undefined,
+};
+
+validateNetworkRequestPayload(validTargetedReq);
+assert(true, 'Accepts valid targeted network request payload');
+
+validateNetworkRequestPayload(validBroadcastReq);
+assert(true, 'Accepts valid shortage broadcast network request payload');
+
+assertThrows(
+  () => validateNetworkRequestPayload({ ...validTargetedReq, id: '' }),
+  'Requires unique network request ID'
+);
+assertThrows(
+  () => validateNetworkRequestPayload({ ...validTargetedReq, requestType: 'invalid_type' }),
+  'Rejects invalid request type'
+);
+assertThrows(
+  () => validateNetworkRequestPayload({ ...validTargetedReq, requestType: 'targeted', targetCenterId: '' }),
+  'Targeted request requires targetCenterId'
+);
+assertThrows(
+  () => validateNetworkRequestPayload({ ...validTargetedReq, bloodGroup: 'Z+' }),
+  'Rejects invalid blood group in network request'
+);
+assertThrows(
+  () => validateNetworkRequestPayload({ ...validTargetedReq, componentType: 'plasma_pack' }),
+  'Rejects invalid component type in network request'
+);
+assertThrows(
+  () => validateNetworkRequestPayload({ ...validTargetedReq, quantityUnits: 0 }),
+  'Rejects quantity < 1'
+);
+assertThrows(
+  () => validateNetworkRequestPayload({ ...validTargetedReq, quantityUnits: 51 }),
+  'Rejects quantity > 50'
+);
+assertThrows(
+  () => validateNetworkRequestPayload({ ...validTargetedReq, quantityUnits: 2.5 }),
+  'Rejects non-integer quantity'
+);
+assertThrows(
+  () => validateNetworkRequestPayload({ ...validTargetedReq, urgency: 'immediate_stat' }),
+  'Rejects invalid urgency enum'
+);
+assertThrows(
+  () => validateNetworkRequestPayload({ ...validTargetedReq, requesterRole: 'admin' }),
+  'Rejects unauthorized requester role (e.g. admin or pharmacist)'
+);
+assertThrows(
+  () => validateNetworkRequestPayload({ ...validTargetedReq, deliveryAddress: { city: 'City' } }),
+  'Rejects incomplete delivery address'
+);
+
+// Stock Summary Validation
+const validSummary = {
+  'O+_whole_blood': 25,
+  'A+_platelets': 10,
+  'B-_red_blood_cells': 4,
+  'AB+_fresh_frozen_plasma': 0,
+};
+
+validateBloodBankCenterSummary(validSummary);
+assert(true, 'Accepts valid center available stock summary');
+
+assertThrows(
+  () => validateBloodBankCenterSummary({ 'invalid_key': 5 }),
+  'Rejects stock summary with invalid key format'
+);
+assertThrows(
+  () => validateBloodBankCenterSummary({ 'O+_unknown_component': 5 }),
+  'Rejects stock summary with unknown component type'
+);
+assertThrows(
+  () => validateBloodBankCenterSummary({ 'O+_whole_blood': -1 }),
+  'Rejects stock summary with negative stock count'
+);
+assertThrows(
+  () => validateBloodBankCenterSummary({ 'O+_whole_blood': 2.7 }),
+  'Rejects stock summary with non-integer stock count'
+);
 
 console.log('\n================================================================');
 console.log(`SUMMARY: ${passed} PASSED, ${failed} FAILED`);

@@ -1,4 +1,4 @@
-﻿# Project Blueprint: MEDICORE-AI
+# Project Blueprint: MEDICORE-AI
 
 ## Overview
 Medicore-AI is an AI-powered healthcare management platform built on Next.js 16 (App Router), React 19, Tailwind CSS v4, and Firebase (Authentication & Cloud Firestore). It provides strict role-based dashboards to manage users, patients, medical history timelines, pharmacy inventory, and appointments cleanly and securely.
@@ -310,34 +310,36 @@ Medicore-AI is an AI-powered healthcare management platform built on Next.js 16 
 
 ---
 
-### In Progress: Phase 4A.7 — Inventory Creation & Lifecycle Security Closure
-- **Status:** In Progress (Strict Isolation Mode in worktree `../MEDICORE-AI-blood-bank` on branch `feature/blood-bank-management`).
-- **Starting HEAD:** `aade955263a0bc19de9e0e8d8099542766bcd64a`.
-- **Scope & Security Closure Plan:**
-  1. **Critical Issue A (Direct Creation of Impossible Inventory States):**
-     - Restrict `match /inventory/{unitId}` `allow create` rule strictly to `request.resource.data.status == 'available'`.
-     - Explicitly prohibit initial non-available statuses: `transfused`, `reserved`, `quarantine`, `expired`, `discarded`.
-     - Prohibit injected reservation, allocation, distribution, or fulfillment metadata (`reservedForRequestId` must not be present or must be null).
-  2. **Critical Issue B (Delivery Lifecycle Bypass):**
-     - Prevent attack where an adversary attempts an atomic batch/transaction to create inventory directly as `transfused`, attach to an existing request, add to `fulfilledUnitIds`, and mark request `partially_fulfilled`/`fulfilled`.
-  3. **Critical Issue C (Donation Provenance & Screening Verification):**
-     - Enforce in Firestore rules that referenced donation exists, belongs to same center (`centerId`), has `screeningStatus == 'tested_passed'`, donorId matches (`don.donorId == request.resource.data.donorId`), and bloodGroup matches (`don.bloodGroup == request.resource.data.bloodGroup`).
-     - Mirror checks in `createInventoryUnit()` service layer.
-  4. **Critical Issue D (Legitimate Reservation Transition):**
-     - Enforce that units cannot start `reserved`; reservation must only occur via valid transition from `available` for an approved/partially_fulfilled request, atomic with request allocation.
-  5. **Clinical Allocation Compatibility:**
-     - Inspect `createDistribution()` and document the clear boundary between operational inventory reservation and physical laboratory compatibility verification by licensed staff.
-  6. **Automated Security Tests (Category K):**
-     - Add Category K tests to `tests/blood-bank/blood-bank-security.test.mjs` verifying:
-       - Deny creation with status `transfused`, `reserved`, `expired`, `discarded`.
-       - Deny creation with `available` status but forged `reservedForRequestId`.
-       - Deny creation referencing nonexistent donation, cross-center donation, donorId mismatch, blood group mismatch.
-       - Deny creation referencing unscreened donation (`screeningStatus: 'pending'`) or failed donation (`screeningStatus: 'tested_failed'`).
-       - Deny delivery lifecycle bypass (atomic batch creating transfused unit + marking request fulfilled).
-       - Allow legitimate creation of `available` unit from `tested_passed` donation with matching donor and blood group.
-       - Allow legitimate reservation transition from `available` via distribution transaction.
-  7. **Full 8-Suite Verification & Delivery:**
-     - Run all 8 verification suites.
-     - Document in `docs/phase-4/PHASE_4A_7_INVENTORY_LIFECYCLE_SECURITY_REPORT.md`.
-     - Commit and push to `origin/feature/blood-bank-management`.
+### Completed: Phase 4A.7 — Inventory Creation & Lifecycle Security Closure
+- **Status:** Complete & Verified on branch `feature/blood-bank-management` (Commit: `d6264ad3569842f45b4b7ced44b88abb4c757bd6`).
+- **Core Deliverables:**
+  - Hardened `match /inventory/{unitId}` `allow create` rule strictly to `request.resource.data.status == 'available'`.
+  - Disallowed forged initial reservation/fulfillment metadata (`reservedForRequestId` must be absent or null).
+  - Enforced donation provenance via `isValidInventoryDonation()`: donation exists in same center, screening passed (`tested_passed`), matching donor ID, matching blood group.
+  - Implemented transactional validations in `createInventoryUnit()`.
+  - Extended security suite with Category K (15 tests, 90/90 passing).
+  - Clean 8-suite regression pass with 0 errors.
+
+---
+
+### Completed: Phase 4B — Shared Blood Bank Network
+- **Status:** Complete & Verified on branch `feature/blood-bank-management`.
+- **Core Deliverables:**
+  - **Dual-Layer Privacy Model:** Physical units stay strictly inside `bloodBank/{centerId}/inventory/{unitId}` to protect donor privacy (`donorId`, `donationId`), accessible only to authorized `blood_bank` personnel. Public stock discovery by patients and doctors operates entirely via a sanitized, aggregate `availableStockSummary` projection published on `bloodBank/{centerId}`.
+  - **Root-Level Network Namespace:** Shared cross-center requests coordinated at `/networkRequests/{requestId}` for targeted and shortage broadcast requests.
+  - **Types & Runtime Validation:** Implemented `StockSummaryKey`, `AvailableStockSummary`, `BloodBankCenter`, `NetworkBloodRequest` in `types.ts`, and runtime validators `validateNetworkRequestPayload()` and `validateBloodBankCenterSummary()` in `validation.ts`.
+  - **Hardened Security Rules:** Updated `docs/phase-4/blood-bank-firestore-rules.fragment` allowing public read of center directories, restricting summary updates to staff, enforcing strict requester UID and role integrity on network requests, and allowing authorized state transitions (cancel, convert, accept, reject).
+  - **Transactional Service Layer:** Added `createNetworkBloodRequest()`, `acceptNetworkBloodRequest()` with atomic anti-collision reservation locks, `rejectNetworkBloodRequest()`, `cancelNetworkBloodRequest()`, `convertRejectedToBroadcast()`, `updateBloodBankCenterStockSummary()`, `fetchPublicBloodBankCenters()`, and `fetchNetworkBloodRequests()`.
+  - **Exhibition Dataset (`src/lib/blood-bank/exhibition-data.ts`):** Created 4 verified regional centers, 4 sample network requests (emergency STAT broadcast, targeted request, reserved request, rejected request), and verified units tagged with `isExhibitionData: true`.
+  - **Dashboard UI (`src/app/dashboard/blood-bank/components/NetworkTab.tsx`):** Integrated dedicated "Shared Network" tab with request filtering, emergency STAT alerts, unit selection modals, decline flow, center stock explorer, and one-click exhibition dataset seeding.
+  - **Comprehensive Verification (334/334 Passing Assertions):**
+    - `blood-bank-security.test.mjs`: 105/105 PASS (Categories A through L)
+    - `blood-bank-distribution-integrity.test.mjs`: 26/26 PASS (Single-center & network anti-collision concurrency tests)
+    - `blood-bank-validation.test.mjs`: 97/97 PASS (Suites 1 through 9)
+    - `firestore-security.test.mjs`: 45/45 PASS
+    - `menstrual-security.test.mjs`: 61/61 PASS
+    - `npx tsc --noEmit`: 0 Errors
+    - `npm run lint`: 0 Errors (5 pre-existing warnings in unrelated files preserved)
+    - `npm run build`: Success across all 15 routes in Next.js 16.2.0 production build.
+  - **Documentation:** Authored comprehensive report in `docs/phase-4/PHASE_4B_SHARED_NETWORK_REPORT.md`.
 

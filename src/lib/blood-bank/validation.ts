@@ -19,6 +19,8 @@ import {
   BloodInventoryUnit,
   BloodRequest,
   BloodDistribution,
+  NetworkBloodRequest,
+  AvailableStockSummary,
 } from './types';
 import { BLOOD_GROUPS, BLOOD_COMPONENTS } from './constants';
 
@@ -392,6 +394,124 @@ export function validateDistributionPayload(data: Partial<BloodDistribution>): v
 
   if (Object.keys(errors).length > 0) {
     throw new BloodBankValidationError('Distribution validation failed', errors);
+  }
+}
+
+/**
+ * Validate Network Blood Request Payload (Phase 4B)
+ */
+export function validateNetworkRequestPayload(data: Partial<NetworkBloodRequest>): void {
+  const errors: Record<string, string> = {};
+
+  if (!data.id || typeof data.id !== 'string' || data.id.trim().length === 0) {
+    errors.id = 'Unique network request ID is required.';
+  }
+
+  if (!data.requestType || !['targeted', 'shortage_broadcast'].includes(data.requestType)) {
+    errors.requestType = 'Valid request type (targeted or shortage_broadcast) is required.';
+  } else if (data.requestType === 'targeted') {
+    if (!data.targetCenterId || typeof data.targetCenterId !== 'string' || data.targetCenterId.trim().length === 0) {
+      errors.targetCenterId = 'Target blood bank center ID is required for targeted requests.';
+    }
+  }
+
+  if (!data.requesterUid || typeof data.requesterUid !== 'string' || data.requesterUid.trim().length === 0) {
+    errors.requesterUid = 'Requester UID is required.';
+  }
+
+  if (!data.requesterRole || !['patient', 'doctor'].includes(data.requesterRole)) {
+    errors.requesterRole = 'Requester role must be either patient or doctor.';
+  }
+
+  if (!data.requesterName || typeof data.requesterName !== 'string' || data.requesterName.trim().length < 2) {
+    errors.requesterName = 'Requester full name is required (minimum 2 characters).';
+  }
+
+  if (!isValidBloodGroup(data.bloodGroup)) {
+    errors.bloodGroup = 'Valid requested blood group is required.';
+  }
+
+  if (!isValidComponentType(data.componentType)) {
+    errors.componentType = 'Valid blood component type is required.';
+  }
+
+  if (
+    typeof data.quantityUnits !== 'number' ||
+    !Number.isInteger(data.quantityUnits) ||
+    data.quantityUnits < 1 ||
+    data.quantityUnits > 50
+  ) {
+    errors.quantityUnits = 'Requested quantity must be an integer between 1 and 50 units.';
+  }
+
+  const validUrgencies: RequestUrgency[] = ['routine', 'urgent', 'emergency_stat'];
+  if (!data.urgency || !validUrgencies.includes(data.urgency)) {
+    errors.urgency = 'Valid clinical urgency level is required.';
+  }
+
+  if (!data.requiredByDate || typeof data.requiredByDate !== 'string' || data.requiredByDate.trim().length === 0) {
+    errors.requiredByDate = 'Required-by date/time is required.';
+  }
+
+  if (!data.deliveryAddress || typeof data.deliveryAddress !== 'object') {
+    errors.deliveryAddress = 'Delivery address details are required.';
+  } else {
+    if (
+      !data.deliveryAddress.hospitalOrFacilityName ||
+      typeof data.deliveryAddress.hospitalOrFacilityName !== 'string' ||
+      data.deliveryAddress.hospitalOrFacilityName.trim().length < 2
+    ) {
+      errors['deliveryAddress.hospitalOrFacilityName'] = 'Delivery hospital or facility name is required.';
+    }
+    if (
+      !data.deliveryAddress.city ||
+      typeof data.deliveryAddress.city !== 'string' ||
+      data.deliveryAddress.city.trim().length < 2
+    ) {
+      errors['deliveryAddress.city'] = 'Delivery city is required.';
+    }
+    if (
+      !data.deliveryAddress.contactPhone ||
+      typeof data.deliveryAddress.contactPhone !== 'string' ||
+      data.deliveryAddress.contactPhone.trim().length < 3
+    ) {
+      errors['deliveryAddress.contactPhone'] = 'Contact phone number is required.';
+    }
+  }
+
+  if (Object.keys(errors).length > 0) {
+    throw new BloodBankValidationError('Network blood request validation failed', errors);
+  }
+}
+
+/**
+ * Validate Blood Bank Center Available Stock Summary (Phase 4B)
+ * Ensures all summary keys conform to {BloodGroup}_{BloodComponentType}
+ * and all quantities are non-negative integers.
+ */
+export function validateBloodBankCenterSummary(summary: AvailableStockSummary): void {
+  const errors: Record<string, string> = {};
+
+  if (!summary || typeof summary !== 'object' || Array.isArray(summary)) {
+    throw new BloodBankValidationError('Available stock summary must be a valid key-value object.');
+  }
+
+  for (const [key, value] of Object.entries(summary)) {
+    const parts = key.split('_');
+    const bloodGroup = parts[0] as BloodGroup;
+    const componentType = parts.slice(1).join('_') as BloodComponentType;
+
+    if (!isValidBloodGroup(bloodGroup) || !isValidComponentType(componentType)) {
+      errors[key] = `Invalid summary key format '${key}'. Must be in format '{BloodGroup}_{BloodComponentType}'.`;
+    }
+
+    if (typeof value !== 'number' || !Number.isInteger(value) || value < 0) {
+      errors[key] = `Available stock count for '${key}' must be a non-negative integer (received ${value}).`;
+    }
+  }
+
+  if (Object.keys(errors).length > 0) {
+    throw new BloodBankValidationError('Center stock summary validation failed', errors);
   }
 }
 

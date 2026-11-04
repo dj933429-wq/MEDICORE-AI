@@ -17,6 +17,11 @@
 // 3. `isBloodBank()` helper: hasRole('blood_bank')
 // =============================================================================
 
+    // Helper function for patient role (Phase 4B)
+    function isPatient() {
+      return hasRole('patient');
+    }
+
     // =========================================================================
     // 8. Isolated Blood Bank Subsystem (Namespace: bloodBank/{centerId}/...)
     // =========================================================================
@@ -180,9 +185,15 @@
           && don.bloodGroup == bloodGroup;
       }
 
-      // Center metadata document: read-only for authenticated blood bank staff
-      allow read: if isAuthenticated() && isBloodBank();
-      allow write: if false; // Center documents provisioned via Admin SDK only
+      // Phase 4B: Center directory metadata and availableStockSummary readable by all authenticated clinical/patient roles
+      allow read: if isAuthenticated();
+      // Center metadata update allowed only for authenticated blood bank staff updating availableStockSummary
+      allow update: if isAuthenticated() && isBloodBank()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['availableStockSummary', 'updatedAt'])
+        && request.resource.data.id == resource.data.id
+        && (!('availableStockSummary' in request.resource.data) || request.resource.data.availableStockSummary is map);
+      allow create: if false; // Center documents provisioned via Admin SDK or system setup only
+      allow delete: if false;
 
       // -----------------------------------------------------------------------
       // 8.1 Donors Registry
@@ -557,4 +568,102 @@
         allow update: if false;
         allow delete: if false;
       }
+    }
+
+    // =========================================================================
+    // 8.7 Network Blood Requests (Phase 4B Multi-Center Shared Network)
+    // Namespace: /networkRequests/{requestId} (Root Level)
+    // =========================================================================
+    match /networkRequests/{requestId} {
+      // Requesters can read their own; Blood Banks and Admins can read all active requests
+      allow read: if isAuthenticated() && (
+        resource.data.requesterUid == request.auth.uid ||
+        isBloodBank() ||
+        isAdmin()
+      );
+
+      // Patients and Doctors can create network requests bound to their authenticated UID
+      allow create: if isAuthenticated() && (isPatient() || isDoctor())
+        && request.resource.data.id == requestId
+        && request.resource.data.requesterUid == request.auth.uid
+        && request.resource.data.requesterRole == request.auth.token.role
+        && request.resource.data.status == 'submitted'
+        && request.resource.data.requestType in ['targeted', 'shortage_broadcast']
+        && (
+          request.resource.data.requestType != 'targeted' || (
+            request.resource.data.targetCenterId is string &&
+            request.resource.data.targetCenterId.size() > 0 &&
+            exists(/databases/$(database)/documents/bloodBank/$(request.resource.data.targetCenterId))
+          )
+        )
+        && request.resource.data.bloodGroup in ['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-']
+        && request.resource.data.componentType in ['whole_blood', 'red_blood_cells', 'platelets', 'fresh_frozen_plasma', 'cryoprecipitate']
+        && request.resource.data.quantityUnits is int
+        && request.resource.data.quantityUnits >= 1 && request.resource.data.quantityUnits <= 50
+        && (!('acceptedCenterId' in request.resource.data) || request.resource.data.acceptedCenterId == null)
+        && (!('assignedUnitIds' in request.resource.data) || request.resource.data.assignedUnitIds == null || request.resource.data.assignedUnitIds.size() == 0)
+        && (!('fulfilledUnitIds' in request.resource.data) || request.resource.data.fulfilledUnitIds == null || request.resource.data.fulfilledUnitIds.size() == 0);
+
+      // State transitions on network requests
+      allow update: if isAuthenticated() && (
+        // Requester Cancel: only when request is still 'submitted'
+        (
+          resource.data.requesterUid == request.auth.uid &&
+          resource.data.status == 'submitted' &&
+          request.resource.data.status == 'cancelled' &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'updatedAt'])
+        ) ||
+        // Requester Broadcast Conversion: when targeted request was rejected by center, requester can convert to broadcast
+        (
+          resource.data.requesterUid == request.auth.uid &&
+          resource.data.status == 'rejected' &&
+          request.resource.data.status == 'submitted' &&
+          request.resource.data.requestType == 'shortage_broadcast' &&
+          (!('targetCenterId' in request.resource.data) || request.resource.data.targetCenterId == null) &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'requestType', 'targetCenterId', 'updatedAt'])
+        ) ||
+        // Blood Bank Claim & Reservation: moves from 'submitted' to 'accepted' or 'reserved'
+        (
+          isBloodBank() &&
+          resource.data.status == 'submitted' &&
+          request.resource.data.status in ['accepted', 'reserved'] &&
+          request.resource.data.acceptedCenterId is string &&
+          request.resource.data.acceptedCenterId.size() > 0 &&
+          request.resource.data.authorizedStaffUid == request.auth.uid &&
+          (
+            request.resource.data.status != 'reserved' || (
+              request.resource.data.assignedUnitIds is list &&
+              request.resource.data.assignedUnitIds.size() >= 1 &&
+              request.resource.data.assignedUnitIds.size() <= resource.data.quantityUnits
+            )
+          ) &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'status', 'acceptedCenterId', 'assignedUnitIds', 'authorizedStaffUid', 'updatedAt'
+          ])
+        ) ||
+        // Blood Bank Target Rejection: target blood bank can reject a targeted request
+        (
+          isBloodBank() &&
+          resource.data.status == 'submitted' &&
+          resource.data.requestType == 'targeted' &&
+          request.resource.data.status == 'rejected' &&
+          request.resource.data.authorizedStaffUid == request.auth.uid &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'status', 'rejectionReason', 'authorizedStaffUid', 'updatedAt'
+          ])
+        ) ||
+        // Blood Bank Dispatch / Fulfillment / Cancellation lifecycle
+        (
+          isBloodBank() &&
+          resource.data.status in ['accepted', 'reserved', 'dispatched'] &&
+          request.resource.data.status in ['dispatched', 'fulfilled', 'cancelled'] &&
+          request.resource.data.acceptedCenterId == resource.data.acceptedCenterId &&
+          request.resource.data.authorizedStaffUid == request.auth.uid &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'status', 'assignedUnitIds', 'fulfilledUnitIds', 'authorizedStaffUid', 'updatedAt'
+          ])
+        )
+      );
+
+      allow delete: if false; // Permanent audit preservation
     }
