@@ -201,6 +201,14 @@
             'collectionDate', 'expiryDate', 'volumeMl', 'storageLocation', 'status',
             'statusReason', 'reservedForRequestId', 'createdAt', 'updatedAt'
           ])
+          && (
+            request.resource.data.status != 'transfused' || resource.data.status == 'reserved'
+          )
+          && (
+            resource.data.status != 'reserved' ||
+            request.resource.data.status in ['available', 'quarantine', 'expired', 'discarded'] ||
+            request.resource.data.reservedForRequestId == resource.data.reservedForRequestId
+          )
           && isValidInventoryStateTransition(resource.data.status, request.resource.data.status);
 
         allow delete: if false; // Units transition to 'discarded' or 'transfused', never deleted
@@ -280,6 +288,7 @@
             'createdAt', 'updatedAt'
           ])
           && exists(/databases/$(database)/documents/bloodBank/$(centerId)/requests/$(request.resource.data.requestId))
+          && get(/databases/$(database)/documents/bloodBank/$(centerId)/requests/$(request.resource.data.requestId)).data.status in ['approved', 'partially_fulfilled']
           && request.resource.data.dispatchStatus in ['prepared', 'dispatched', 'in_transit', 'delivered', 'cancelled']
           && request.resource.data.authorizedStaffUid == request.auth.uid
           && request.resource.data.temperatureLogVerified == true

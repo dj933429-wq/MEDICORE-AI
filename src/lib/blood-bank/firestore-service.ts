@@ -9,7 +9,7 @@
  * partial failures can never desynchronize inventory, donor metrics, or audit logs.
  */
 
-import { db } from '@/lib/firebase';
+import { db } from '../firebase.js';
 import {
   collection,
   doc,
@@ -51,14 +51,16 @@ function getCenterId(centerId?: string): string {
  */
 function createAuditRefAndEvent(
   centerId: string,
-  event: Omit<BloodBankAuditEvent, 'id' | 'centerId' | 'timestamp'>
+  event: Omit<BloodBankAuditEvent, 'id' | 'centerId' | 'timestamp'>,
+  firestoreInstance = db
 ) {
   const auditId = `audit_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
-  const auditRef = doc(db, 'bloodBank', centerId, 'auditLogs', auditId);
+  const auditRef = doc(firestoreInstance, 'bloodBank', centerId, 'auditLogs', auditId);
   const fullEvent: BloodBankAuditEvent = {
     id: auditId,
     centerId,
     ...event,
+    ...(event.actorEmail ? { actorEmail: event.actorEmail } : {}),
     timestamp: new Date().toISOString(),
   };
   return { auditRef, fullEvent };
@@ -443,7 +445,8 @@ export async function fetchDistributions(centerId = DEFAULT_BLOOD_BANK_CENTER_ID
  */
 export async function createDistribution(
   payload: Omit<BloodDistribution, 'id' | 'centerId' | 'createdAt' | 'updatedAt'>,
-  actor: { uid: string; email?: string }
+  actor: { uid: string; email?: string },
+  firestoreInstance = db
 ): Promise<BloodDistribution> {
   validateDistributionPayload(payload);
 
@@ -459,23 +462,27 @@ export async function createDistribution(
     updatedAt: now,
   };
 
-  const distRef = doc(db, 'bloodBank', centerId, 'issues', issueId);
-  const reqRef = doc(db, 'bloodBank', centerId, 'requests', payload.requestId);
-  const { auditRef, fullEvent } = createAuditRefAndEvent(centerId, {
-    actorUid: actor.uid,
-    actorEmail: actor.email,
-    actorRole: 'blood_bank',
-    action: 'UNITS_DISPATCHED',
-    entity: 'distribution',
-    entityId: issueId,
-    details: {
-      requestId: newDistribution.requestId,
-      destination: newDistribution.destinationOrganization,
-      unitsCount: newDistribution.issuedUnitIds.length,
+  const distRef = doc(firestoreInstance, 'bloodBank', centerId, 'issues', issueId);
+  const reqRef = doc(firestoreInstance, 'bloodBank', centerId, 'requests', payload.requestId);
+  const { auditRef, fullEvent } = createAuditRefAndEvent(
+    centerId,
+    {
+      actorUid: actor.uid,
+      actorEmail: actor.email,
+      actorRole: 'blood_bank',
+      action: 'UNITS_DISPATCHED',
+      entity: 'distribution',
+      entityId: issueId,
+      details: {
+        requestId: newDistribution.requestId,
+        destination: newDistribution.destinationOrganization,
+        unitsCount: newDistribution.issuedUnitIds.length,
+      },
     },
-  });
+    firestoreInstance
+  );
 
-  await runTransaction(db, async (tx) => {
+  await runTransaction(firestoreInstance, async (tx) => {
     // 1. Transactional reads: check request and all units first
     const reqSnap = await tx.get(reqRef);
     if (!reqSnap.exists()) {
@@ -484,10 +491,10 @@ export async function createDistribution(
 
     const reqData = reqSnap.data() as BloodRequest;
 
-    // Terminal statuses cannot accept additional units
-    if (['fulfilled', 'rejected', 'cancelled'].includes(reqData.status)) {
+    // Only 'approved' or 'partially_fulfilled' requests can receive units
+    if (reqData.status !== 'approved' && reqData.status !== 'partially_fulfilled') {
       throw new BloodBankValidationError(
-        `Cannot issue units against request ${payload.requestId} with terminal status '${reqData.status}'.`
+        `Cannot issue units against request ${payload.requestId} with status '${reqData.status}'. Requests must be 'approved' or 'partially_fulfilled'.`
       );
     }
 
@@ -506,8 +513,18 @@ export async function createDistribution(
       throw new BloodBankValidationError('Selected unit IDs must be unique within a distribution.');
     }
 
+    // Ensure no selected unit is already in the request's previously issued/allocated units
+    const previouslyFulfilledSet = new Set(previouslyFulfilled);
+    for (const uId of payload.issuedUnitIds) {
+      if (previouslyFulfilledSet.has(uId)) {
+        throw new BloodBankValidationError(
+          `Unit ${uId} has already been allocated or issued to request ${payload.requestId}.`
+        );
+      }
+    }
+
     const unitRefs = payload.issuedUnitIds.map((uId) => ({
-      ref: doc(db, 'bloodBank', centerId, 'inventory', uId),
+      ref: doc(firestoreInstance, 'bloodBank', centerId, 'inventory', uId),
       id: uId,
     }));
 
@@ -539,7 +556,16 @@ export async function createDistribution(
     // 2. Transactional writes
     tx.set(distRef, newDistribution);
 
+    // If the distribution itself is created with dispatchStatus 'cancelled',
+    // units are NOT reserved or transfused, and request fulfillment counts are NOT incremented.
+    if (payload.dispatchStatus === 'cancelled') {
+      tx.set(auditRef, fullEvent);
+      return;
+    }
+
     for (const u of unitRefs) {
+      // Inventory transition: available units must first be reserved; reserved units transition
+      // to transfused only upon delivered dispatchStatus, or remain reserved while in transit.
       tx.update(u.ref, {
         status: payload.dispatchStatus === 'delivered' ? 'transfused' : 'reserved',
         reservedForRequestId: payload.requestId,
@@ -547,7 +573,9 @@ export async function createDistribution(
       });
     }
 
-    // Update request status based on fulfillment
+    // Request fulfillment semantics:
+    // Units count toward fulfillment count when allocated/dispatched, but request
+    // reaches terminal 'fulfilled' status only when delivered or fully allocated.
     const updatedFulfilled = Array.from(new Set([...previouslyFulfilled, ...payload.issuedUnitIds]));
     const isFullyFulfilled = updatedFulfilled.length >= reqData.quantityUnits;
 
