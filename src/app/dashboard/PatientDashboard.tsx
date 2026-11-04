@@ -448,8 +448,9 @@ export default function PatientDashboard() {
                         {getStatusBadge(appt.status)}
                       </div>
                       <div className="text-gray-600 font-medium flex gap-4 text-sm bg-gray-50 p-3 rounded-lg border border-gray-200">
-                         <span>ðŸ“… {appt.date}</span>
-                         <span>â° {appt.time}</span>
+                        <span>Date: {appt.date}</span>
+                        <span>|</span>
+                        <span>Time: {appt.time}</span>
                       </div>
                       {appt.notes && <p className="text-gray-500 text-sm mt-1 flex-1">{appt.notes}</p>}
                     </div>
