@@ -124,3 +124,4 @@ test.describe('Module 2: Menstrual Health Tracker', () => {
     await expect(page).toHaveURL(/\/dashboard$/, { timeout: 15000 });
   });
 });
+

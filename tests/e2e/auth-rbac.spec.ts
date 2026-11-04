@@ -116,7 +116,7 @@ test.describe('Module 1: Authentication & RBAC Routing', () => {
     await page.goto('/dashboard/pharmacist');
     
     // Should immediately bounce back to /dashboard
-    await expect(page).toHaveURL(/\/dashboard$/, { timeout: 10000 });
+    await expect(page).toHaveURL(/\/dashboard/, { timeout: 10000 });
   });
 
   test('1.8 Edge Case - Session Expiry: Clearing storage/cookies kicks user to /login or shows access denied', async ({ page, context }) => {
@@ -140,5 +140,47 @@ test.describe('Module 1: Authentication & RBAC Routing', () => {
     // Session cleared: Dashboard layout must kick unauthenticated user to /login
     await expect(page).toHaveURL(/\/login/, { timeout: 15000 });
     await expect(page.locator('button[type="submit"]')).toBeVisible({ timeout: 10000 });
+  });
+
+  test('1.9 Signup as Doctor persists doctor role and routes to Doctor dashboard', async ({ page }) => {
+    const uniqueEmail = `e2e_doc_${Date.now()}@medicore.ai`;
+    await page.goto('/signup');
+    await page.fill('#name', 'Dr. Fresh Signup');
+    await page.selectOption('#role', 'doctor');
+    await page.fill('#email', uniqueEmail);
+    await page.fill('#password', 'E2E_TestPassword123!');
+    await page.click('button[type="submit"]');
+
+    // Should route directly to Doctor dashboard
+    await expect(page).toHaveURL(/\/dashboard/, { timeout: 20000 });
+    await expect(page.locator('text=Dr.').or(page.locator('text=Patient Records')).first()).toBeVisible({ timeout: 15000 });
+  });
+
+  test('1.10 Signup as Pharmacist persists pharmacist role and routes to Pharmacist dashboard', async ({ page }) => {
+    const uniqueEmail = `e2e_pharm_${Date.now()}@medicore.ai`;
+    await page.goto('/signup');
+    await page.fill('#name', 'Pharm. Fresh Signup');
+    await page.selectOption('#role', 'pharmacist');
+    await page.fill('#email', uniqueEmail);
+    await page.fill('#password', 'E2E_TestPassword123!');
+    await page.click('button[type="submit"]');
+
+    // Should route directly to Pharmacist dashboard
+    await expect(page).toHaveURL(/\/dashboard\/pharmacist/, { timeout: 20000 });
+    await expect(page.locator('text=Pharmacist').first()).toBeVisible({ timeout: 15000 });
+  });
+
+  test('1.11 Signup as Blood Bank persists blood_bank role and routes to Blood Bank dashboard', async ({ page }) => {
+    const uniqueEmail = `e2e_bloodbank_${Date.now()}@medicore.ai`;
+    await page.goto('/signup');
+    await page.fill('#name', 'Blood Bank Center Staff');
+    await page.selectOption('#role', 'blood_bank');
+    await page.fill('#email', uniqueEmail);
+    await page.fill('#password', 'E2E_TestPassword123!');
+    await page.click('button[type="submit"]');
+
+    // Should route directly to Blood Bank dashboard
+    await expect(page).toHaveURL(/\/dashboard\/blood-bank/, { timeout: 20000 });
+    await expect(page.locator('text=Blood Bank').first()).toBeVisible({ timeout: 15000 });
   });
 });

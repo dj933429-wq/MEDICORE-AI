@@ -12,13 +12,18 @@ export default function Dashboard() {
   const router = useRouter();
 
   useEffect(() => {
-    if (user?.role === 'pharmacist') {
-      router.replace('/dashboard/pharmacist');
+    if (!loading && user) {
+      if (user.role === 'doctor') {
+        router.replace('/dashboard/doctor');
+      } else if (user.role === 'pharmacist') {
+        router.replace('/dashboard/pharmacist');
+      } else if (user.role === 'blood_bank') {
+        router.replace('/dashboard/blood-bank');
+      } else if (user.role === 'patient') {
+        router.replace('/dashboard/patient');
+      }
     }
-    if (user?.role === 'blood_bank') {
-      router.replace('/dashboard/blood-bank');
-    }
-  }, [user, router]);
+  }, [user, loading, router]);
 
   if (loading) {
     return (

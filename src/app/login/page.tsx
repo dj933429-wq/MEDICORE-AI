@@ -15,10 +15,14 @@ export default function LoginPage() {
 
   useEffect(() => {
     if (!loading && user) {
-      if (user.role === 'pharmacist') {
+      if (user.role === 'doctor') {
+        router.replace('/dashboard/doctor');
+      } else if (user.role === 'pharmacist') {
         router.replace('/dashboard/pharmacist');
       } else if (user.role === 'blood_bank') {
         router.replace('/dashboard/blood-bank');
+      } else if (user.role === 'patient') {
+        router.replace('/dashboard/patient');
       } else {
         router.replace('/dashboard');
       }

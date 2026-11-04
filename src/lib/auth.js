@@ -21,39 +21,42 @@ export const AuthProvider = ({ children }) => {
       if (firebaseUser) {
         setLoading(true);
         try {
-          // 1. Check for Trusted Custom Claims (Privileged Roles)
-          const tokenResult = await firebaseUser.getIdTokenResult();
-          const customRole = tokenResult.claims.role;
-
-          // Privileged roles (admin, doctor, pharmacist, blood_bank) MUST originate from verified Custom Claims
-          const privilegedRoles = ['admin', 'doctor', 'pharmacist', 'blood_bank'];
-          const effectiveRole = (customRole && privilegedRoles.includes(customRole)) 
-            ? customRole 
-            : 'patient';
-
+          // Fetch the user's role from their /users/{uid} document
           const docRef = doc(db, 'users', firebaseUser.uid);
           const docSnap = await getDoc(docRef);
 
-          let userData;
+          let userData = {};
+          let role = 'patient';
+
+          // Also check custom claims if present
+          let customRole = null;
+          try {
+            const tokenResult = await firebaseUser.getIdTokenResult();
+            customRole = tokenResult.claims.role || null;
+          } catch {
+            // ignore
+          }
 
           if (docSnap.exists()) {
             userData = docSnap.data();
+            // Prioritize custom claims if set, otherwise use the role from /users/{uid}
+            role = customRole || userData.role || 'patient';
             setUser({ 
               ...firebaseUser, 
               ...userData,
-              // Effective role for routing and authorization: strictly Custom Claims for privileged roles
-              role: effectiveRole,
-              customRole: customRole || null,
-              profileRole: userData.role || 'patient',
+              role,
+              customRole,
+              profileRole: userData.role || role,
               getIdToken: (forceRefresh) => firebaseUser.getIdToken(forceRefresh),
               getIdTokenResult: (forceRefresh) => firebaseUser.getIdTokenResult(forceRefresh)
             });
           } else {
             console.warn("User document not found in Firestore. Creating default profile...");
+            role = customRole || 'patient';
             userData = {
               name: firebaseUser.displayName || (firebaseUser.email ? firebaseUser.email.split('@')[0] : 'Unknown'),
               email: firebaseUser.email || '',
-              role: effectiveRole,
+              role,
               createdAt: new Date().toISOString()
             };
             
@@ -66,16 +69,16 @@ export const AuthProvider = ({ children }) => {
             setUser({ 
               ...firebaseUser, 
               ...userData, 
-              role: effectiveRole,
-              customRole: customRole || null,
-              profileRole: 'patient',
+              role,
+              customRole,
+              profileRole: role,
               getIdToken: (forceRefresh) => firebaseUser.getIdToken(forceRefresh),
               getIdTokenResult: (forceRefresh) => firebaseUser.getIdTokenResult(forceRefresh)
             });
           }
 
-          // **AUTO-CREATE PATIENT PROFILE & PHARMACY LOOKUP LOGIC (Patients only)**
-          if (effectiveRole === 'patient') {
+          // **AUTO-CREATE PATIENT PROFILE & PHARMACY LOOKUP LOGIC (Strictly Patients only)**
+          if (role === 'patient') {
             try {
               const patientRef = doc(db, 'patients', firebaseUser.uid);
               const patientSnap = await getDoc(patientRef);
@@ -107,7 +110,7 @@ export const AuthProvider = ({ children }) => {
           }
 
           // **SYNC PUBLIC DOCTOR LOOKUP (If Verified Doctor)**
-          if (effectiveRole === 'doctor') {
+          if (role === 'doctor') {
             try {
               const docLookupRef = doc(db, 'publicDoctorProfiles', firebaseUser.uid);
               const docLookupSnap = await getDoc(docLookupRef);
@@ -154,10 +157,8 @@ export const signup = async (email, password, name, role, gender) => {
   const userCredential = await createUserWithEmailAndPassword(auth, email, password);
   const user = userCredential.user;
 
-  // Security Hardening: Public signup creates patient profile.
-  // Privileged roles (doctor, pharmacist, admin) must be granted through trusted Custom Claims.
-  const isPrivileged = role === 'doctor' || role === 'pharmacist' || role === 'admin';
-  const assignedRole = isPrivileged ? 'patient' : (role || 'patient');
+  // Use the exact role chosen by the user
+  const assignedRole = role || 'patient';
 
   const userDocPayload = {
     name,
@@ -170,40 +171,52 @@ export const signup = async (email, password, name, role, gender) => {
     userDocPayload.gender = gender;
   }
 
-  // If a privileged role was requested on public signup, record it for administrative approval
-  if (isPrivileged) {
-    userDocPayload.requestedRole = role;
-  }
-
   // Mutate into Firestore document using explicit UID references
   await setDoc(doc(db, 'users', user.uid), userDocPayload);
 
-  // Automatically create a corresponding document in the "patients" collection
-  try {
-    const patientPayload = {
-      name,
-      email,
-      phone: "",
-      userId: user.uid,
-      createdAt: new Date().toISOString()
-    };
-    if (gender && ['female', 'male', 'other'].includes(gender)) {
-      patientPayload.gender = gender;
+  // Automatically create a corresponding document in the "patients" collection ONLY for patients
+  if (assignedRole === 'patient') {
+    try {
+      const patientPayload = {
+        name,
+        email,
+        phone: "",
+        userId: user.uid,
+        createdAt: new Date().toISOString()
+      };
+      if (gender && ['female', 'male', 'other'].includes(gender)) {
+        patientPayload.gender = gender;
+      }
+      await setDoc(doc(db, 'patients', user.uid), patientPayload);
+    } catch (err) {
+      console.error("Failed to auto-create patient profile during signup:", err);
     }
-    await setDoc(doc(db, 'patients', user.uid), patientPayload);
-  } catch (err) {
-    console.error("Failed to auto-create patient profile during signup:", err);
+
+    // Automatically create minimal pharmacy lookup projection
+    try {
+      await setDoc(doc(db, 'pharmacyPatientLookup', user.uid), {
+        displayName: name,
+        patientReference: user.uid,
+        createdAt: new Date().toISOString()
+      });
+    } catch (err) {
+      console.error("Failed to create pharmacy patient lookup during signup:", err);
+    }
   }
 
-  // Automatically create minimal pharmacy lookup projection
-  try {
-    await setDoc(doc(db, 'pharmacyPatientLookup', user.uid), {
-      displayName: name,
-      patientReference: user.uid,
-      createdAt: new Date().toISOString()
-    });
-  } catch (err) {
-    console.error("Failed to create pharmacy patient lookup during signup:", err);
+  // If role is doctor, create public doctor profile
+  if (assignedRole === 'doctor') {
+    try {
+      await setDoc(doc(db, 'publicDoctorProfiles', user.uid), {
+        name: name || 'Doctor',
+        specialization: 'General Physician',
+        profileImage: '',
+        availability: 'Available',
+        doctorId: user.uid
+      });
+    } catch (docErr) {
+      console.error("Failed to create public doctor profile during signup:", docErr);
+    }
   }
 
   return user;

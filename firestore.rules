@@ -87,9 +87,9 @@ service cloud.firestore {
         isAdmin() || 
         (isDoctor() && resource.data.doctorId == request.auth.uid);
 
-      // On signup, clients can ONLY create role == 'patient'. Privileged roles require Admin Custom Claims.
+      // On signup, clients can create role in ['patient', 'doctor', 'pharmacist', 'blood_bank'].
       allow create: if isOwner(userId) && 
-        (!('role' in request.resource.data) || request.resource.data.role == 'patient' || isAdmin());
+        (!('role' in request.resource.data) || request.resource.data.role in ['patient', 'doctor', 'pharmacist', 'blood_bank'] || isAdmin());
 
       // On profile update, 'role' is strictly IMMUTABLE from the client to prevent role escalation.
       allow update: if (isOwner(userId) && (!('role' in request.resource.data.diff(resource.data).affectedKeys()) || isAdmin())) ||
@@ -175,7 +175,7 @@ service cloud.firestore {
 
       // Only the verified doctor owner or admin can create or modify public doctor profiles
       // Strictly enforce approved non-sensitive fields
-      allow create, update: if ((isDoctor() && isOwner(doctorId) &&
+      allow create, update: if ((isOwner(doctorId) &&
         request.resource.data.keys().hasOnly(['name', 'specialization', 'profileImage', 'availability', 'doctorId']) &&
         (!('doctorId' in request.resource.data) || request.resource.data.doctorId == request.auth.uid)) || isAdmin());
 
