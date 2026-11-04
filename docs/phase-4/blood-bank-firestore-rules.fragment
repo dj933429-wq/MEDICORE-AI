@@ -69,6 +69,62 @@
         );
       }
 
+      // Helper function to verify that all inventory units in a list (bounded up to 4 units) are transfused specifically for requestId
+      function isUnitTransfusedForRequest(centerId, unitId, requestId) {
+        let inv = getAfter(/databases/$(database)/documents/bloodBank/$(centerId)/inventory/$(unitId)).data;
+        return inv.status == 'transfused' && inv.reservedForRequestId == requestId && inv.centerId == centerId;
+      }
+
+      function areUnitsTransfusedForRequest(centerId, unitList, requestId) {
+        return unitList.size() == 0 || (
+          unitList.size() == 1 ? isUnitTransfusedForRequest(centerId, unitList[0], requestId) :
+          unitList.size() == 2 ? (
+            isUnitTransfusedForRequest(centerId, unitList[0], requestId) &&
+            isUnitTransfusedForRequest(centerId, unitList[1], requestId)
+          ) :
+          unitList.size() == 3 ? (
+            isUnitTransfusedForRequest(centerId, unitList[0], requestId) &&
+            isUnitTransfusedForRequest(centerId, unitList[1], requestId) &&
+            isUnitTransfusedForRequest(centerId, unitList[2], requestId)
+          ) :
+          unitList.size() == 4 ? (
+            isUnitTransfusedForRequest(centerId, unitList[0], requestId) &&
+            isUnitTransfusedForRequest(centerId, unitList[1], requestId) &&
+            isUnitTransfusedForRequest(centerId, unitList[2], requestId) &&
+            isUnitTransfusedForRequest(centerId, unitList[3], requestId)
+          ) :
+          false
+        );
+      }
+
+      // Helper function to verify that all inventory units in a list (bounded up to 4 units) are reserved specifically for requestId
+      function isUnitReservedForRequest(centerId, unitId, requestId) {
+        let inv = getAfter(/databases/$(database)/documents/bloodBank/$(centerId)/inventory/$(unitId)).data;
+        return inv.status == 'reserved' && inv.reservedForRequestId == requestId && inv.centerId == centerId;
+      }
+
+      function areUnitsReservedForRequest(centerId, unitList, requestId) {
+        return unitList.size() == 0 || (
+          unitList.size() == 1 ? isUnitReservedForRequest(centerId, unitList[0], requestId) :
+          unitList.size() == 2 ? (
+            isUnitReservedForRequest(centerId, unitList[0], requestId) &&
+            isUnitReservedForRequest(centerId, unitList[1], requestId)
+          ) :
+          unitList.size() == 3 ? (
+            isUnitReservedForRequest(centerId, unitList[0], requestId) &&
+            isUnitReservedForRequest(centerId, unitList[1], requestId) &&
+            isUnitReservedForRequest(centerId, unitList[2], requestId)
+          ) :
+          unitList.size() == 4 ? (
+            isUnitReservedForRequest(centerId, unitList[0], requestId) &&
+            isUnitReservedForRequest(centerId, unitList[1], requestId) &&
+            isUnitReservedForRequest(centerId, unitList[2], requestId) &&
+            isUnitReservedForRequest(centerId, unitList[3], requestId)
+          ) :
+          false
+        );
+      }
+
       // Helper function to verify that all allocated units being removed are either delivered (transfused) or released (available)
       function areAllocatedUnitsReleasedOrTransfused(centerId, unitList) {
         return unitList.size() == 0 || (
@@ -289,6 +345,10 @@
             request.resource.data.status in ['available', 'quarantine', 'expired', 'discarded'] ||
             request.resource.data.reservedForRequestId == resource.data.reservedForRequestId
           )
+          && (
+            !(resource.data.status in ['transfused', 'discarded', 'expired']) ||
+            request.resource.data.reservedForRequestId == resource.data.reservedForRequestId
+          )
           && isValidInventoryStateTransition(resource.data.status, request.resource.data.status);
 
         allow delete: if false; // Units transition to 'discarded' or 'transfused', never deleted
@@ -350,7 +410,6 @@
             !('allocatedUnitIds' in resource.data) ||
             resource.data.allocatedUnitIds.size() == 0 ||
             request.resource.data.allocatedUnitIds.hasAll(resource.data.allocatedUnitIds) ||
-            request.resource.data.fulfilledUnitIds.hasAll(resource.data.allocatedUnitIds) ||
             areAllocatedUnitsReleasedOrTransfused(centerId, resource.data.allocatedUnitIds)
           )
           && (
@@ -360,13 +419,20 @@
               (!('fulfilledUnitIds' in resource.data) || request.resource.data.fulfilledUnitIds.size() > resource.data.fulfilledUnitIds.size()) &&
               (request.resource.data.status != 'fulfilled' || request.resource.data.fulfilledUnitIds.size() >= resource.data.quantityUnits) &&
               (request.resource.data.status != 'partially_fulfilled' || request.resource.data.fulfilledUnitIds.size() < resource.data.quantityUnits) &&
-              areUnitsTransfused(centerId, request.resource.data.fulfilledUnitIds)
+              areUnitsTransfusedForRequest(centerId, request.resource.data.fulfilledUnitIds, requestId)
+            )
+          )
+          && (
+            request.resource.data.status in ['partially_fulfilled', 'fulfilled'] || (
+              (!('fulfilledUnitIds' in resource.data) && (!('fulfilledUnitIds' in request.resource.data) || request.resource.data.fulfilledUnitIds.size() == 0)) ||
+              (request.resource.data.fulfilledUnitIds == resource.data.fulfilledUnitIds)
             )
           )
           && (
             request.resource.data.status != 'cancelled' || (
-              (!('allocatedUnitIds' in resource.data) || resource.data.allocatedUnitIds.size() == 0) &&
-              (!('allocatedUnitIds' in request.resource.data) || request.resource.data.allocatedUnitIds.size() == 0)
+              (!('allocatedUnitIds' in resource.data) || resource.data.allocatedUnitIds.size() == 0 || areUnitsAvailableOrDisposed(centerId, resource.data.allocatedUnitIds)) &&
+              (!('allocatedUnitIds' in request.resource.data) || request.resource.data.allocatedUnitIds.size() == 0) &&
+              (!('fulfilledUnitIds' in resource.data) ? (!('fulfilledUnitIds' in request.resource.data) || request.resource.data.fulfilledUnitIds.size() == 0) : request.resource.data.fulfilledUnitIds == resource.data.fulfilledUnitIds)
             )
           );
 
@@ -400,7 +466,15 @@
           && request.resource.data.authorizedStaffUid == request.auth.uid
           && request.resource.data.temperatureLogVerified == true
           && request.resource.data.issuedUnitIds is list
-          && request.resource.data.issuedUnitIds.size() > 0;
+          && request.resource.data.issuedUnitIds.size() > 0
+          && request.resource.data.issuedUnitIds.size() <= 4
+          && request.resource.data.issuedUnitIds.toSet().size() == request.resource.data.issuedUnitIds.size()
+          && (
+            request.resource.data.dispatchStatus == 'cancelled' || (
+              getAfter(/databases/$(database)/documents/bloodBank/$(centerId)/requests/$(request.resource.data.requestId)).data.allocatedUnitIds.hasAll(request.resource.data.issuedUnitIds) &&
+              areUnitsReservedForRequest(centerId, request.resource.data.issuedUnitIds, request.resource.data.requestId)
+            )
+          );
 
         allow update: if isAuthenticated() && isBloodBank()
           && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
@@ -427,7 +501,7 @@
               request.resource.data.deliveredAt is string &&
               getAfter(/databases/$(database)/documents/bloodBank/$(centerId)/requests/$(resource.data.requestId)).data.status in ['partially_fulfilled', 'fulfilled'] &&
               getAfter(/databases/$(database)/documents/bloodBank/$(centerId)/requests/$(resource.data.requestId)).data.fulfilledUnitIds.hasAll(resource.data.issuedUnitIds) &&
-              areUnitsTransfused(centerId, resource.data.issuedUnitIds)
+              areUnitsTransfusedForRequest(centerId, resource.data.issuedUnitIds, resource.data.requestId)
             )
           )
           && (

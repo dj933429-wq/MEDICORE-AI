@@ -1284,6 +1284,532 @@ async function runBloodBankSecuritySuite() {
     }));
   });
 
+  // =========================================================================
+  // Category J: Final Security Closure & Attack Vector Denial (Phase 4A.6)
+  // Attack A (Cancellation Bypass), Attack B (Cross-Request Reuse), Attack C (Unallocated Issue)
+  // =========================================================================
+  console.log('\n--- Category J: Final Security Closure (Phase 4A.6) ---');
+
+  await testEnv.withSecurityRulesDisabled(async (context) => {
+    const adminDb = context.firestore();
+    const cId = 'center-primary';
+
+    // 1. Setup for J1 & J2: Requests with 2 allocated units for cancellation testing
+    await setDoc(doc(adminDb, 'bloodBank', cId, 'requests', 'req_j1'), {
+      id: 'req_j1',
+      centerId: cId,
+      requestingOrganization: 'County General',
+      bloodGroup: 'O+',
+      componentType: 'whole_blood',
+      quantityUnits: 2,
+      urgency: 'urgent',
+      requiredByDate: '2026-04-01',
+      status: 'approved',
+      allocatedUnitIds: ['unit_j1_a', 'unit_j1_b'],
+      fulfilledUnitIds: [],
+      createdAt: '2026-03-01T10:00:00Z',
+      updatedAt: '2026-03-01T10:00:00Z',
+    });
+    await setDoc(doc(adminDb, 'bloodBank', cId, 'inventory', 'unit_j1_a'), {
+      id: 'unit_j1_a',
+      centerId: cId,
+      donationId: 'donation_existing',
+      donorId: 'donor_existing',
+      bloodGroup: 'O+',
+      componentType: 'whole_blood',
+      collectionDate: '2026-03-01',
+      expiryDate: '2026-04-05',
+      volumeMl: 450,
+      storageLocation: 'Cold Room 1',
+      status: 'reserved',
+      reservedForRequestId: 'req_j1',
+      createdAt: '2026-03-01T10:00:00Z',
+      updatedAt: '2026-03-01T10:00:00Z',
+    });
+    await setDoc(doc(adminDb, 'bloodBank', cId, 'inventory', 'unit_j1_b'), {
+      id: 'unit_j1_b',
+      centerId: cId,
+      donationId: 'donation_existing',
+      donorId: 'donor_existing',
+      bloodGroup: 'O+',
+      componentType: 'whole_blood',
+      collectionDate: '2026-03-01',
+      expiryDate: '2026-04-05',
+      volumeMl: 450,
+      storageLocation: 'Cold Room 1',
+      status: 'reserved',
+      reservedForRequestId: 'req_j1',
+      createdAt: '2026-03-01T10:00:00Z',
+      updatedAt: '2026-03-01T10:00:00Z',
+    });
+
+    // req_j2: Legitimate cancellation workflow where all units are released to available
+    await setDoc(doc(adminDb, 'bloodBank', cId, 'requests', 'req_j2'), {
+      id: 'req_j2',
+      centerId: cId,
+      requestingOrganization: 'County General',
+      bloodGroup: 'O+',
+      componentType: 'whole_blood',
+      quantityUnits: 2,
+      urgency: 'urgent',
+      requiredByDate: '2026-04-01',
+      status: 'approved',
+      allocatedUnitIds: ['unit_j2_a', 'unit_j2_b'],
+      fulfilledUnitIds: [],
+      createdAt: '2026-03-01T10:00:00Z',
+      updatedAt: '2026-03-01T10:00:00Z',
+    });
+    await setDoc(doc(adminDb, 'bloodBank', cId, 'inventory', 'unit_j2_a'), {
+      id: 'unit_j2_a',
+      centerId: cId,
+      donationId: 'donation_existing',
+      donorId: 'donor_existing',
+      bloodGroup: 'O+',
+      componentType: 'whole_blood',
+      collectionDate: '2026-03-01',
+      expiryDate: '2026-04-05',
+      volumeMl: 450,
+      storageLocation: 'Cold Room 1',
+      status: 'reserved',
+      reservedForRequestId: 'req_j2',
+      createdAt: '2026-03-01T10:00:00Z',
+      updatedAt: '2026-03-01T10:00:00Z',
+    });
+    await setDoc(doc(adminDb, 'bloodBank', cId, 'inventory', 'unit_j2_b'), {
+      id: 'unit_j2_b',
+      centerId: cId,
+      donationId: 'donation_existing',
+      donorId: 'donor_existing',
+      bloodGroup: 'O+',
+      componentType: 'whole_blood',
+      collectionDate: '2026-03-01',
+      expiryDate: '2026-04-05',
+      volumeMl: 450,
+      storageLocation: 'Cold Room 1',
+      status: 'reserved',
+      reservedForRequestId: 'req_j2',
+      createdAt: '2026-03-01T10:00:00Z',
+      updatedAt: '2026-03-01T10:00:00Z',
+    });
+    await setDoc(doc(adminDb, 'bloodBank', cId, 'issues', 'issue_j2'), {
+      id: 'issue_j2',
+      centerId: cId,
+      requestId: 'req_j2',
+      destinationOrganization: 'County General',
+      issuedUnitIds: ['unit_j2_a', 'unit_j2_b'],
+      authorizedStaffUid: 'staff_bloodbank_1',
+      dispatchStatus: 'dispatched',
+      temperatureLogVerified: true,
+      createdAt: '2026-03-01T10:00:00Z',
+      updatedAt: '2026-03-01T10:00:00Z',
+    });
+
+    // 2. Setup for J3 & J4: Attack B cross-request fulfillment testing
+    await setDoc(doc(adminDb, 'bloodBank', cId, 'requests', 'req_j3_b'), {
+      id: 'req_j3_b',
+      centerId: cId,
+      requestingOrganization: 'City Hospital',
+      bloodGroup: 'O+',
+      componentType: 'whole_blood',
+      quantityUnits: 1,
+      urgency: 'routine',
+      requiredByDate: '2026-03-10',
+      status: 'fulfilled',
+      allocatedUnitIds: [],
+      fulfilledUnitIds: ['unit_j3_transfused'],
+      createdAt: '2026-03-01T08:00:00Z',
+      updatedAt: '2026-03-01T09:00:00Z',
+    });
+    await setDoc(doc(adminDb, 'bloodBank', cId, 'inventory', 'unit_j3_transfused'), {
+      id: 'unit_j3_transfused',
+      centerId: cId,
+      donationId: 'donation_existing',
+      donorId: 'donor_existing',
+      bloodGroup: 'O+',
+      componentType: 'whole_blood',
+      collectionDate: '2026-03-01',
+      expiryDate: '2026-04-05',
+      volumeMl: 450,
+      storageLocation: 'Transfused Archive',
+      status: 'transfused',
+      reservedForRequestId: 'req_j3_b',
+      createdAt: '2026-03-01T08:00:00Z',
+      updatedAt: '2026-03-01T09:00:00Z',
+    });
+    await setDoc(doc(adminDb, 'bloodBank', cId, 'requests', 'req_j3_a'), {
+      id: 'req_j3_a',
+      centerId: cId,
+      requestingOrganization: 'County General',
+      bloodGroup: 'O+',
+      componentType: 'whole_blood',
+      quantityUnits: 1,
+      urgency: 'urgent',
+      requiredByDate: '2026-04-01',
+      status: 'approved',
+      allocatedUnitIds: [],
+      fulfilledUnitIds: [],
+      createdAt: '2026-03-01T10:00:00Z',
+      updatedAt: '2026-03-01T10:00:00Z',
+    });
+
+    // req_j4_a: Legitimate fulfillment testing
+    await setDoc(doc(adminDb, 'bloodBank', cId, 'requests', 'req_j4_a'), {
+      id: 'req_j4_a',
+      centerId: cId,
+      requestingOrganization: 'County General',
+      bloodGroup: 'O+',
+      componentType: 'whole_blood',
+      quantityUnits: 1,
+      urgency: 'urgent',
+      requiredByDate: '2026-04-01',
+      status: 'approved',
+      allocatedUnitIds: ['unit_j4'],
+      fulfilledUnitIds: [],
+      createdAt: '2026-03-01T10:00:00Z',
+      updatedAt: '2026-03-01T10:00:00Z',
+    });
+    await setDoc(doc(adminDb, 'bloodBank', cId, 'inventory', 'unit_j4'), {
+      id: 'unit_j4',
+      centerId: cId,
+      donationId: 'donation_existing',
+      donorId: 'donor_existing',
+      bloodGroup: 'O+',
+      componentType: 'whole_blood',
+      collectionDate: '2026-03-01',
+      expiryDate: '2026-04-05',
+      volumeMl: 450,
+      storageLocation: 'Cold Room 1',
+      status: 'reserved',
+      reservedForRequestId: 'req_j4_a',
+      createdAt: '2026-03-01T10:00:00Z',
+      updatedAt: '2026-03-01T10:00:00Z',
+    });
+    await setDoc(doc(adminDb, 'bloodBank', cId, 'issues', 'issue_j4'), {
+      id: 'issue_j4',
+      centerId: cId,
+      requestId: 'req_j4_a',
+      destinationOrganization: 'County General',
+      issuedUnitIds: ['unit_j4'],
+      authorizedStaffUid: 'staff_bloodbank_1',
+      dispatchStatus: 'dispatched',
+      temperatureLogVerified: true,
+      createdAt: '2026-03-01T10:00:00Z',
+      updatedAt: '2026-03-01T10:00:00Z',
+    });
+
+    // 3. Setup for J5, J6, J7, J8: Attack C unallocated issue creation testing
+    await setDoc(doc(adminDb, 'bloodBank', cId, 'requests', 'req_j5_a'), {
+      id: 'req_j5_a',
+      centerId: cId,
+      requestingOrganization: 'County General',
+      bloodGroup: 'O+',
+      componentType: 'whole_blood',
+      quantityUnits: 2,
+      urgency: 'urgent',
+      requiredByDate: '2026-04-01',
+      status: 'approved',
+      allocatedUnitIds: ['unit_j5_other'],
+      fulfilledUnitIds: [],
+      createdAt: '2026-03-01T10:00:00Z',
+      updatedAt: '2026-03-01T10:00:00Z',
+    });
+    await setDoc(doc(adminDb, 'bloodBank', cId, 'inventory', 'unit_j5_other'), {
+      id: 'unit_j5_other',
+      centerId: cId,
+      donationId: 'donation_existing',
+      donorId: 'donor_existing',
+      bloodGroup: 'O+',
+      componentType: 'whole_blood',
+      collectionDate: '2026-03-01',
+      expiryDate: '2026-04-05',
+      volumeMl: 450,
+      storageLocation: 'Cold Room 1',
+      status: 'reserved',
+      reservedForRequestId: 'req_j5_b',
+      createdAt: '2026-03-01T10:00:00Z',
+      updatedAt: '2026-03-01T10:00:00Z',
+    });
+
+    await setDoc(doc(adminDb, 'bloodBank', cId, 'requests', 'req_j6_a'), {
+      id: 'req_j6_a',
+      centerId: cId,
+      requestingOrganization: 'County General',
+      bloodGroup: 'O+',
+      componentType: 'whole_blood',
+      quantityUnits: 2,
+      urgency: 'urgent',
+      requiredByDate: '2026-04-01',
+      status: 'approved',
+      allocatedUnitIds: [],
+      fulfilledUnitIds: [],
+      createdAt: '2026-03-01T10:00:00Z',
+      updatedAt: '2026-03-01T10:00:00Z',
+    });
+    await setDoc(doc(adminDb, 'bloodBank', cId, 'inventory', 'unit_j6_avail'), {
+      id: 'unit_j6_avail',
+      centerId: cId,
+      donationId: 'donation_existing',
+      donorId: 'donor_existing',
+      bloodGroup: 'O+',
+      componentType: 'whole_blood',
+      collectionDate: '2026-03-01',
+      expiryDate: '2026-04-05',
+      volumeMl: 450,
+      storageLocation: 'Cold Room 1',
+      status: 'available',
+      reservedForRequestId: null,
+      createdAt: '2026-03-01T10:00:00Z',
+      updatedAt: '2026-03-01T10:00:00Z',
+    });
+
+    await setDoc(doc(adminDb, 'bloodBank', cId, 'requests', 'req_j7_a'), {
+      id: 'req_j7_a',
+      centerId: cId,
+      requestingOrganization: 'County General',
+      bloodGroup: 'O+',
+      componentType: 'whole_blood',
+      quantityUnits: 2,
+      urgency: 'urgent',
+      requiredByDate: '2026-04-01',
+      status: 'approved',
+      allocatedUnitIds: ['unit_j7_dup'],
+      fulfilledUnitIds: [],
+      createdAt: '2026-03-01T10:00:00Z',
+      updatedAt: '2026-03-01T10:00:00Z',
+    });
+    await setDoc(doc(adminDb, 'bloodBank', cId, 'inventory', 'unit_j7_dup'), {
+      id: 'unit_j7_dup',
+      centerId: cId,
+      donationId: 'donation_existing',
+      donorId: 'donor_existing',
+      bloodGroup: 'O+',
+      componentType: 'whole_blood',
+      collectionDate: '2026-03-01',
+      expiryDate: '2026-04-05',
+      volumeMl: 450,
+      storageLocation: 'Cold Room 1',
+      status: 'reserved',
+      reservedForRequestId: 'req_j7_a',
+      createdAt: '2026-03-01T10:00:00Z',
+      updatedAt: '2026-03-01T10:00:00Z',
+    });
+
+    await setDoc(doc(adminDb, 'bloodBank', cId, 'requests', 'req_j8_a'), {
+      id: 'req_j8_a',
+      centerId: cId,
+      requestingOrganization: 'County General',
+      bloodGroup: 'O+',
+      componentType: 'whole_blood',
+      quantityUnits: 2,
+      urgency: 'urgent',
+      requiredByDate: '2026-04-01',
+      status: 'approved',
+      allocatedUnitIds: [],
+      fulfilledUnitIds: [],
+      createdAt: '2026-03-01T10:00:00Z',
+      updatedAt: '2026-03-01T10:00:00Z',
+    });
+    await setDoc(doc(adminDb, 'bloodBank', cId, 'inventory', 'unit_j8_a'), {
+      id: 'unit_j8_a',
+      centerId: cId,
+      donationId: 'donation_existing',
+      donorId: 'donor_existing',
+      bloodGroup: 'O+',
+      componentType: 'whole_blood',
+      collectionDate: '2026-03-01',
+      expiryDate: '2026-04-05',
+      volumeMl: 450,
+      storageLocation: 'Cold Room 1',
+      status: 'available',
+      reservedForRequestId: null,
+      createdAt: '2026-03-01T10:00:00Z',
+      updatedAt: '2026-03-01T10:00:00Z',
+    });
+    await setDoc(doc(adminDb, 'bloodBank', cId, 'inventory', 'unit_j8_b'), {
+      id: 'unit_j8_b',
+      centerId: cId,
+      donationId: 'donation_existing',
+      donorId: 'donor_existing',
+      bloodGroup: 'O+',
+      componentType: 'whole_blood',
+      collectionDate: '2026-03-01',
+      expiryDate: '2026-04-05',
+      volumeMl: 450,
+      storageLocation: 'Cold Room 1',
+      status: 'available',
+      reservedForRequestId: null,
+      createdAt: '2026-03-01T10:00:00Z',
+      updatedAt: '2026-03-01T10:00:00Z',
+    });
+  });
+
+  // Test J1: Attack A — Two-unit cancellation bypass attempt (DENIED)
+  await test('J1: Deny cancellation bypass attempt where unit remains reserved or fulfilled IDs are injected', async () => {
+    const cId = 'center-primary';
+    const batch = writeBatch(staff);
+    batch.update(doc(staff, 'bloodBank', cId, 'requests', 'req_j1'), {
+      status: 'cancelled',
+      fulfilledUnitIds: ['unit_j1_a', 'unit_j1_b'],
+      allocatedUnitIds: [],
+      updatedAt: '2026-03-01T11:00:00Z',
+    });
+    batch.update(doc(staff, 'bloodBank', cId, 'inventory', 'unit_j1_a'), {
+      status: 'available',
+      reservedForRequestId: null,
+      updatedAt: '2026-03-01T11:00:00Z',
+    });
+    await assertFails(batch.commit());
+  });
+
+  // Test J2: Attack A — Legitimate cancellation workflow where all units are released to available (SUCCEEDS)
+  await test('J2: Legitimate cancellation workflow where all units are released to available succeeds', async () => {
+    const cId = 'center-primary';
+    const batch = writeBatch(staff);
+    batch.update(doc(staff, 'bloodBank', cId, 'inventory', 'unit_j2_a'), {
+      status: 'available',
+      reservedForRequestId: null,
+      updatedAt: '2026-03-01T11:00:00Z',
+    });
+    batch.update(doc(staff, 'bloodBank', cId, 'inventory', 'unit_j2_b'), {
+      status: 'available',
+      reservedForRequestId: null,
+      updatedAt: '2026-03-01T11:00:00Z',
+    });
+    batch.update(doc(staff, 'bloodBank', cId, 'issues', 'issue_j2'), {
+      dispatchStatus: 'cancelled',
+      updatedAt: '2026-03-01T11:00:00Z',
+    });
+    batch.update(doc(staff, 'bloodBank', cId, 'requests', 'req_j2'), {
+      status: 'cancelled',
+      allocatedUnitIds: [],
+      updatedAt: '2026-03-01T11:00:00Z',
+    });
+    await assertSucceeds(batch.commit());
+  });
+
+  // Test J3: Attack B — Cross-request fulfillment attempt using a previously transfused unit (DENIED)
+  await test('J3: Deny cross-request fulfillment attempt using unit transfused for another request', async () => {
+    const cId = 'center-primary';
+    await assertFails(updateDoc(doc(staff, 'bloodBank', cId, 'requests', 'req_j3_a'), {
+      status: 'fulfilled',
+      fulfilledUnitIds: ['unit_j3_transfused'],
+      updatedAt: '2026-03-01T11:00:00Z',
+    }));
+  });
+
+  // Test J4: Attack B — Legitimate delivery & fulfillment of a correctly reserved unit (SUCCEEDS)
+  await test('J4: Legitimate delivery and fulfillment of a correctly reserved unit succeeds', async () => {
+    const cId = 'center-primary';
+    const batch = writeBatch(staff);
+    batch.update(doc(staff, 'bloodBank', cId, 'inventory', 'unit_j4'), {
+      status: 'transfused',
+      reservedForRequestId: 'req_j4_a',
+      updatedAt: '2026-03-01T11:00:00Z',
+    });
+    batch.update(doc(staff, 'bloodBank', cId, 'requests', 'req_j4_a'), {
+      status: 'fulfilled',
+      fulfilledUnitIds: ['unit_j4'],
+      allocatedUnitIds: [],
+      updatedAt: '2026-03-01T11:00:00Z',
+    });
+    batch.update(doc(staff, 'bloodBank', cId, 'issues', 'issue_j4'), {
+      dispatchStatus: 'delivered',
+      deliveredAt: '2026-03-01T11:00:00Z',
+      updatedAt: '2026-03-01T11:00:00Z',
+    });
+    await assertSucceeds(batch.commit());
+  });
+
+  // Test J5: Attack C — Issue creation attempt using a unit reserved for another request (DENIED)
+  await test('J5: Deny issue creation attempt using a unit reserved for another request', async () => {
+    const cId = 'center-primary';
+    await assertFails(setDoc(doc(staff, 'bloodBank', cId, 'issues', 'issue_j5_malicious'), {
+      id: 'issue_j5_malicious',
+      centerId: cId,
+      requestId: 'req_j5_a',
+      destinationOrganization: 'County General',
+      issuedUnitIds: ['unit_j5_other'],
+      authorizedStaffUid: 'staff_bloodbank_1',
+      dispatchStatus: 'dispatched',
+      temperatureLogVerified: true,
+      createdAt: '2026-03-01T11:00:00Z',
+      updatedAt: '2026-03-01T11:00:00Z',
+    }));
+  });
+
+  // Test J6: Attack C — Issue creation attempt using an unallocated unit (DENIED)
+  await test('J6: Deny issue creation attempt using an unallocated unit', async () => {
+    const cId = 'center-primary';
+    await assertFails(setDoc(doc(staff, 'bloodBank', cId, 'issues', 'issue_j6_unallocated'), {
+      id: 'issue_j6_unallocated',
+      centerId: cId,
+      requestId: 'req_j6_a',
+      destinationOrganization: 'County General',
+      issuedUnitIds: ['unit_j6_avail'],
+      authorizedStaffUid: 'staff_bloodbank_1',
+      dispatchStatus: 'dispatched',
+      temperatureLogVerified: true,
+      createdAt: '2026-03-01T11:00:00Z',
+      updatedAt: '2026-03-01T11:00:00Z',
+    }));
+  });
+
+  // Test J7: Attack C — Issue creation attempt with duplicate unit IDs (DENIED)
+  await test('J7: Deny issue creation attempt with duplicate unit IDs in same issue', async () => {
+    const cId = 'center-primary';
+    const batch = writeBatch(staff);
+    batch.set(doc(staff, 'bloodBank', cId, 'issues', 'issue_j7_dup'), {
+      id: 'issue_j7_dup',
+      centerId: cId,
+      requestId: 'req_j7_a',
+      destinationOrganization: 'County General',
+      issuedUnitIds: ['unit_j7_dup', 'unit_j7_dup'],
+      authorizedStaffUid: 'staff_bloodbank_1',
+      dispatchStatus: 'dispatched',
+      temperatureLogVerified: true,
+      createdAt: '2026-03-01T11:00:00Z',
+      updatedAt: '2026-03-01T11:00:00Z',
+    });
+    batch.update(doc(staff, 'bloodBank', cId, 'requests', 'req_j7_a'), {
+      allocatedUnitIds: ['unit_j7_dup'],
+      updatedAt: '2026-03-01T11:00:00Z',
+    });
+    await assertFails(batch.commit());
+  });
+
+  // Test J8: Attack C — Legitimate allocation-to-issue workflow (SUCCEEDS)
+  await test('J8: Legitimate allocation-to-issue workflow succeeds', async () => {
+    const cId = 'center-primary';
+    const batch = writeBatch(staff);
+    batch.update(doc(staff, 'bloodBank', cId, 'inventory', 'unit_j8_a'), {
+      status: 'reserved',
+      reservedForRequestId: 'req_j8_a',
+      updatedAt: '2026-03-01T11:00:00Z',
+    });
+    batch.update(doc(staff, 'bloodBank', cId, 'inventory', 'unit_j8_b'), {
+      status: 'reserved',
+      reservedForRequestId: 'req_j8_a',
+      updatedAt: '2026-03-01T11:00:00Z',
+    });
+    batch.update(doc(staff, 'bloodBank', cId, 'requests', 'req_j8_a'), {
+      allocatedUnitIds: ['unit_j8_a', 'unit_j8_b'],
+      updatedAt: '2026-03-01T11:00:00Z',
+    });
+    batch.set(doc(staff, 'bloodBank', cId, 'issues', 'issue_j8_valid'), {
+      id: 'issue_j8_valid',
+      centerId: cId,
+      requestId: 'req_j8_a',
+      destinationOrganization: 'County General',
+      issuedUnitIds: ['unit_j8_a', 'unit_j8_b'],
+      authorizedStaffUid: 'staff_bloodbank_1',
+      dispatchStatus: 'dispatched',
+      temperatureLogVerified: true,
+      createdAt: '2026-03-01T11:00:00Z',
+      updatedAt: '2026-03-01T11:00:00Z',
+    });
+    await assertSucceeds(batch.commit());
+  });
+
   // Summary
   console.log('\n================================================================');
   const passCount = results.filter((r) => r.status === 'PASS').length;
