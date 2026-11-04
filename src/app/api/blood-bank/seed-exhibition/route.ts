@@ -6,7 +6,7 @@ import {
   EXHIBITION_INVENTORY_UNITS,
 } from '@/lib/blood-bank/exhibition-data';
 
-export async function POST(req: Request) {
+export async function POST(_req: Request) {
   try {
     const batch = adminDb.batch();
     const now = new Date().toISOString();
@@ -284,3 +284,4 @@ export async function POST(req: Request) {
     );
   }
 }
+

@@ -41,6 +41,34 @@ const formatINR = (amount: number) => {
   }).format(amount);
 };
 
+function normalizeExpiryToYearMonth(raw: string): string {
+  if (!raw) return '';
+  const trimmed = raw.trim();
+  if (/^\d{4}-\d{2}$/.test(trimmed)) return trimmed;
+  const mmyyyy = trimmed.match(/^(\d{1,2})[\/\-](\d{4})$/);
+  if (mmyyyy) {
+    const m = mmyyyy[1].padStart(2, '0');
+    return `${mmyyyy[2]}-${m}`;
+  }
+  const mmyy = trimmed.match(/^(\d{1,2})[\/\-](\d{2})$/);
+  if (mmyy) {
+    const m = mmyy[1].padStart(2, '0');
+    return `20${mmyy[2]}-${m}`;
+  }
+  const monthMap: Record<string, string> = {
+    jan: '01', feb: '02', mar: '03', apr: '04', may: '05', jun: '06',
+    jul: '07', aug: '08', sep: '09', oct: '10', nov: '11', dec: '12'
+  };
+  const namedMatch = trimmed.match(/(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*[\s\/\-]?(\d{2,4})/i);
+  if (namedMatch) {
+    const mon = monthMap[namedMatch[1].toLowerCase().slice(0, 3)];
+    let yr = namedMatch[2];
+    if (yr.length === 2) yr = `20${yr}`;
+    if (mon && yr) return `${yr}-${mon}`;
+  }
+  return trimmed;
+}
+
 export default function PharmacistDashboard() {
   const { user, loading } = useAuth();
   const router = useRouter();
@@ -297,7 +325,8 @@ export default function PharmacistDashboard() {
   const handleAddMedicine = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!user) return;
-    if (!name || !batch || !expiry || !stock) {
+    const finalExpiry = normalizeExpiryToYearMonth(expiry) || expiry.trim();
+    if (!name.trim() || !batch.trim() || !finalExpiry || !stock) {
       setError('Please fill out all fields.');
       return;
     }
@@ -310,7 +339,7 @@ export default function PharmacistDashboard() {
       await addDoc(collection(db, `inventory/${user.uid}/medicines`), {
         name,
         batch,
-        expiry,
+        expiry: finalExpiry,
         stock: parseInt(stock, 10),
         createdBy: user.uid,
         createdAt: new Date()
@@ -408,7 +437,7 @@ export default function PharmacistDashboard() {
       // =====================
       setName(name || "");
       setBatch(batch || "");
-      setExpiry(expiry || "");
+      setExpiry(normalizeExpiryToYearMonth(expiry) || expiry || "");
 
     } catch (error) {
       console.error("OCR ERROR:", error);
@@ -626,7 +655,8 @@ export default function PharmacistDashboard() {
                 <div>
                   <label className="block text-sm font-semibold text-slate-700 mb-2">Expiry Date</label>
                   <input 
-                    type="month" 
+                    type="month"
+                    placeholder="YYYY-MM" 
                     value={expiry}
                     onChange={(e) => setExpiry(e.target.value)}
                     className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none transition-all"

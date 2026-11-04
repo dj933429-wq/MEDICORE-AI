@@ -1,4 +1,4 @@
-﻿'use client';
+'use client';
 
 import { useState, useEffect, useRef } from 'react';
 import Link from 'next/link';
@@ -198,7 +198,13 @@ export default function PatientDashboard() {
     setApptError('');
 
     if (!newAppt.doctorId || !newAppt.date || !newAppt.time) {
-      setApptError("Please select a doctor, date, and time.");
+      if (!newAppt.doctorId) {
+        setApptError("Please select a doctor.");
+      } else if (!newAppt.date) {
+        setApptError("Please select an appointment date.");
+      } else {
+        setApptError("Please select an appointment time.");
+      }
       return;
     }
 
@@ -295,7 +301,7 @@ export default function PatientDashboard() {
     }
   };
 
-  if (loading) {
+  if (loading && !patientDoc) {
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center">
         <div className="w-12 h-12 border-4 border-blue-200 border-t-blue-600 rounded-full animate-spin"></div>
@@ -373,7 +379,7 @@ export default function PatientDashboard() {
                         type="date" 
                         className="w-full border border-gray-300 rounded-lg px-4 py-2 bg-white focus:ring-2 focus:ring-blue-600 outline-none"
                         value={newAppt.date}
-                        min={new Date().toISOString().split('T')[0]}
+                        min={new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().split('T')[0]}
                         onChange={e => setNewAppt({...newAppt, date: e.target.value})}
                         disabled={booking}
                       />

@@ -150,6 +150,16 @@ export function validateDonorPayload(data: Partial<BloodDonor>): void {
     errors.verifiedByStaffUid = 'Authorizing staff UID is required for verification audit.';
   }
 
+  if (data.weightKg !== undefined && data.weightKg !== null) {
+    if (typeof data.weightKg !== 'number' || isNaN(data.weightKg)) {
+      errors.weightKg = 'Donor weight must be a valid number.';
+    } else if (data.weightKg < 30 || data.weightKg > 250) {
+      errors.weightKg = 'Donor weight must be between 30 kg and 250 kg.';
+    } else if (data.weightKg < 50 && data.eligibilityStatus === 'eligible') {
+      errors.weightKg = 'Donor weight is below the minimum clinical safety threshold (50 kg). Underweight donors must be deferred.';
+    }
+  }
+
   if (Object.keys(errors).length > 0) {
     throw new BloodBankValidationError('Donor validation failed', errors);
   }

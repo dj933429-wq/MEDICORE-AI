@@ -34,6 +34,11 @@ interface PatientBloodPortalProps {
   };
 }
 
+function formatLocalDatetime(date: Date): string {
+  const localMs = date.getTime() - date.getTimezoneOffset() * 60000;
+  return new Date(localMs).toISOString().slice(0, 16);
+}
+
 export default function PatientBloodPortal({ currentUser }: PatientBloodPortalProps) {
   // Navigation State
   const [activeTab, setActiveTab] = useState<'discover' | 'my_requests'>('discover');
@@ -178,7 +183,7 @@ export default function PatientBloodPortal({ currentUser }: PatientBloodPortalPr
     setFormQuantity(1);
     setFormUrgency('routine');
     setFormRequiredBy(
-      new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString().slice(0, 16)
+      formatLocalDatetime(new Date(Date.now() + 24 * 60 * 60 * 1000))
     );
     setFormCity(center.address?.city || '');
     setFormHospital('');
@@ -198,7 +203,7 @@ export default function PatientBloodPortal({ currentUser }: PatientBloodPortalPr
     setFormQuantity(1);
     setFormUrgency('urgent');
     setFormRequiredBy(
-      new Date(Date.now() + 12 * 60 * 60 * 1000).toISOString().slice(0, 16)
+      formatLocalDatetime(new Date(Date.now() + 12 * 60 * 60 * 1000))
     );
     setFormCity('');
     setFormHospital('');

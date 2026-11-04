@@ -33,6 +33,7 @@ export default function DonorsTab({
     fullName: '',
     nationalIdOrPassport: '',
     dateOfBirth: '',
+    weightKg: '',
     gender: 'male' as DonorGender,
     bloodGroup: 'O+' as BloodGroup,
     phone: '',
@@ -64,6 +65,7 @@ export default function DonorsTab({
         fullName: formData.fullName.trim(),
         nationalIdOrPassport: formData.nationalIdOrPassport.trim() || undefined,
         dateOfBirth: formData.dateOfBirth,
+        weightKg: formData.weightKg ? Number(formData.weightKg) : undefined,
         gender: formData.gender,
         bloodGroup: formData.bloodGroup,
         contact: {
@@ -82,6 +84,7 @@ export default function DonorsTab({
         fullName: '',
         nationalIdOrPassport: '',
         dateOfBirth: '',
+        weightKg: '',
         gender: 'male',
         bloodGroup: 'O+',
         phone: '',
@@ -93,7 +96,18 @@ export default function DonorsTab({
       });
       onCloseRegister();
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'Failed to register donor';
+      let msg = 'Failed to register donor';
+      if (err && typeof err === 'object') {
+        const errObj = err as { errors?: Record<string, string>; fieldErrors?: Record<string, string>; message?: string };
+        const fErrors = errObj.fieldErrors || errObj.errors;
+        if (fErrors && Object.keys(fErrors).length > 0) {
+          msg = Object.values(fErrors).join('; ');
+        } else if (typeof errObj.message === 'string') {
+          msg = errObj.message;
+        }
+      } else if (err instanceof Error) {
+        msg = err.message;
+      }
       setFormError(msg);
     } finally {
       setSubmitting(false);
@@ -204,7 +218,10 @@ export default function DonorsTab({
                         </span>
                       </td>
                       <td className="py-3.5 px-4 text-slate-600 capitalize">
-                        {donor.dateOfBirth} ({donor.gender})
+                        <div>{donor.dateOfBirth} ({donor.gender})</div>
+                        {donor.weightKg && (
+                          <div className="text-[11px] text-slate-400 font-medium">{donor.weightKg} kg</div>
+                        )}
                       </td>
                       <td className="py-3.5 px-4 text-slate-600">
                         <div>{donor.contact.phone}</div>
@@ -287,15 +304,32 @@ export default function DonorsTab({
                 </div>
               </div>
 
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">Date of Birth *</label>
-                <input
-                  type="date"
-                  required
-                  value={formData.dateOfBirth}
-                  onChange={(e) => setFormData({ ...formData, dateOfBirth: e.target.value })}
-                  className="w-full px-3 py-2 text-xs border border-slate-200 rounded-lg focus:ring-2 focus:ring-rose-500 focus:outline-none"
-                />
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">Date of Birth *</label>
+                  <input
+                    type="date"
+                    required
+                    value={formData.dateOfBirth}
+                    onChange={(e) => setFormData({ ...formData, dateOfBirth: e.target.value })}
+                    className="w-full px-3 py-2 text-xs border border-slate-200 rounded-lg focus:ring-2 focus:ring-rose-500 focus:outline-none"
+                  />
+                  <span className="text-[10px] text-slate-400">Donor must be 16–100 years old</span>
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">Weight (kg)</label>
+                  <input
+                    type="number"
+                    min="30"
+                    max="250"
+                    step="0.5"
+                    placeholder="e.g. 65"
+                    value={formData.weightKg}
+                    onChange={(e) => setFormData({ ...formData, weightKg: e.target.value })}
+                    className="w-full px-3 py-2 text-xs border border-slate-200 rounded-lg focus:ring-2 focus:ring-rose-500 focus:outline-none"
+                  />
+                  <span className="text-[10px] text-slate-400">Clinical standard: ≥50 kg required</span>
+                </div>
               </div>
 
               <div className="grid grid-cols-2 gap-3">

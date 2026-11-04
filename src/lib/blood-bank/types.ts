@@ -104,6 +104,7 @@ export interface BloodDonor {
   deferralUntil?: string; // YYYY-MM-DD
   lastDonationDate?: string; // YYYY-MM-DD
   donationCount: number;
+  weightKg?: number;
   verifiedByStaffUid: string;
   createdAt: string;
   updatedAt: string;

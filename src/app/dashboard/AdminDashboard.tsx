@@ -499,6 +499,7 @@ export default function AdminDashboard() {
                             ${u.role === 'admin' ? 'bg-red-100 text-red-700 border border-red-200' : 
                               u.role === 'doctor' ? 'bg-emerald-100 text-emerald-700 border border-emerald-200' : 
                               u.role === 'pharmacist' ? 'bg-amber-100 text-amber-700 border border-amber-200' : 
+                              u.role === 'blood_bank' ? 'bg-rose-100 text-rose-700 border border-rose-200' :
                               'bg-blue-100 text-blue-700 border border-blue-200'}`}>
                             {u.role.toUpperCase()}
                           </span>
@@ -547,6 +548,7 @@ export default function AdminDashboard() {
                                 <option value="patient">Patient</option>
                                 <option value="doctor">Doctor</option>
                                 <option value="pharmacist">Pharmacist</option>
+                                <option value="blood_bank">Blood Bank Staff</option>
                               </select>
 
                               <button

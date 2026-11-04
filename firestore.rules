@@ -16,7 +16,10 @@ service cloud.firestore {
 
     // Trusted Authorization via Firebase Auth Custom Claims
     function hasRole(roleName) {
-      return isAuthenticated() && request.auth.token.role == roleName;
+      return isAuthenticated() && (
+        request.auth.token.role == roleName ||
+        (!('role' in request.auth.token) && exists(/databases/$(database)/documents/users/$(request.auth.uid)) && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == roleName)
+      );
     }
 
     function isAdmin() {
@@ -524,6 +527,7 @@ service cloud.firestore {
             'id', 'centerId', 'donorReferenceId', 'fullName', 'nationalIdOrPassport',
             'dateOfBirth', 'gender', 'bloodGroup', 'contact', 'eligibilityStatus',
             'deferralReason', 'deferralUntil', 'lastDonationDate', 'donationCount',
+            'weightKg',
             'verifiedByStaffUid', 'createdAt', 'updatedAt'
           ])
           && request.resource.data.donorReferenceId is string
@@ -536,12 +540,14 @@ service cloud.firestore {
           && request.resource.data.gender in ['male', 'female', 'other']
           && request.resource.data.bloodGroup in ['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-']
           && request.resource.data.eligibilityStatus in ['eligible', 'temporarily_deferred', 'permanently_deferred', 'pending_screening']
-          && request.resource.data.verifiedByStaffUid == request.auth.uid;
+          && request.resource.data.verifiedByStaffUid == request.auth.uid
+          && (!('weightKg' in request.resource.data) || (request.resource.data.weightKg is number && request.resource.data.weightKg >= 30 && request.resource.data.weightKg <= 250));
 
         allow update: if isAuthenticated() && isBloodBank()
           && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
             'fullName', 'nationalIdOrPassport', 'contact', 'eligibilityStatus',
             'deferralReason', 'deferralUntil', 'lastDonationDate', 'donationCount',
+            'weightKg',
             'verifiedByStaffUid', 'updatedAt'
           ])
           && request.resource.data.id == resource.data.id
@@ -555,6 +561,7 @@ service cloud.firestore {
             'id', 'centerId', 'donorReferenceId', 'fullName', 'nationalIdOrPassport',
             'dateOfBirth', 'gender', 'bloodGroup', 'contact', 'eligibilityStatus',
             'deferralReason', 'deferralUntil', 'lastDonationDate', 'donationCount',
+            'weightKg',
             'verifiedByStaffUid', 'createdAt', 'updatedAt'
           ])
           && request.resource.data.eligibilityStatus in ['eligible', 'temporarily_deferred', 'permanently_deferred', 'pending_screening'];

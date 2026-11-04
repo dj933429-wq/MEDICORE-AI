@@ -12,23 +12,53 @@ export default function SignupPage() {
   const [role, setRole] = useState('patient');
   const [gender, setGender] = useState<'female' | 'male' | 'other'>('female');
   const [error, setError] = useState('');
+  const [emailError, setEmailError] = useState('');
+  const [passwordError, setPasswordError] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const router = useRouter();
 
   const handleSignup = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!name || !email || !password || !role) {
-      setError("Please fill in all fields.");
-      return;
-    }
-    setIsLoading(true);
     setError('');
+    setEmailError('');
+    setPasswordError('');
+
+    let hasClientError = false;
+
+    if (!name.trim()) {
+      setError('Please enter your full name.');
+      hasClientError = true;
+    }
+
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!email.trim() || !emailRegex.test(email.trim())) {
+      setEmailError('Please enter a valid email address.');
+      hasClientError = true;
+    }
+
+    if (!password || password.length < 6) {
+      setPasswordError('Password must be at least 6 characters long.');
+      hasClientError = true;
+    }
+
+    if (hasClientError) return;
+
+    setIsLoading(true);
     
     try {
-      await signup(email, password, name, role, role === 'patient' ? gender : undefined);
+      await signup(email.trim(), password, name.trim(), role, role === 'patient' ? gender : undefined);
       router.push('/dashboard');
     } catch (err: unknown) {
-      setError((err as Error).message || 'Failed to register account.');
+      const authErr = err as { code?: string; message?: string };
+      if (authErr.code === 'auth/email-already-in-use') {
+        setEmailError('This email is already registered. Please sign in or use another email.');
+      } else if (authErr.code === 'auth/invalid-email') {
+        setEmailError('The email address format is invalid.');
+      } else if (authErr.code === 'auth/weak-password') {
+        setPasswordError('Password must be at least 6 characters.');
+      } else {
+        setError(authErr.message || 'Failed to register account. Please try again.');
+      }
       setIsLoading(false);
     }
   };
@@ -49,15 +79,19 @@ export default function SignupPage() {
         <form onSubmit={handleSignup} className="space-y-4">
           <div>
             <label className="block text-gray-700 text-sm font-medium mb-2" htmlFor="name">
-              Full Name
+              Full Name *
             </label>
             <input
               className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-600 focus:border-transparent outline-none transition-all"
               id="name"
               type="text"
+              required
               placeholder="John Doe"
               value={name}
-              onChange={(e) => setName(e.target.value)}
+              onChange={(e) => {
+                setName(e.target.value);
+                if (error) setError('');
+              }}
               disabled={isLoading}
             />
           </div>
@@ -104,32 +138,55 @@ export default function SignupPage() {
 
           <div>
             <label className="block text-gray-700 text-sm font-medium mb-2" htmlFor="email">
-              Email
+              Email *
             </label>
             <input
-              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-600 focus:border-transparent outline-none transition-all"
+              className={`w-full px-4 py-2 border rounded-lg focus:ring-2 outline-none transition-all ${
+                emailError
+                  ? 'border-red-400 focus:ring-red-500 bg-red-50/30'
+                  : 'border-gray-300 focus:ring-blue-600 focus:border-transparent'
+              }`}
               id="email"
               type="email"
+              required
               placeholder="user@example.com"
               value={email}
-              onChange={(e) => setEmail(e.target.value)}
+              onChange={(e) => {
+                setEmail(e.target.value);
+                if (emailError) setEmailError('');
+              }}
               disabled={isLoading}
             />
+            {emailError && (
+              <p className="text-xs text-red-600 mt-1 font-medium">{emailError}</p>
+            )}
           </div>
           
           <div>
             <label className="block text-gray-700 text-sm font-medium mb-2" htmlFor="password">
-              Password
+              Password *
             </label>
             <input
-              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-600 focus:border-transparent outline-none transition-all"
+              className={`w-full px-4 py-2 border rounded-lg focus:ring-2 outline-none transition-all ${
+                passwordError
+                  ? 'border-red-400 focus:ring-red-500 bg-red-50/30'
+                  : 'border-gray-300 focus:ring-blue-600 focus:border-transparent'
+              }`}
               id="password"
               type="password"
-              placeholder="••••••••"
+              required
+              minLength={6}
+              placeholder="•••••••• (min 6 characters)"
               value={password}
-              onChange={(e) => setPassword(e.target.value)}
+              onChange={(e) => {
+                setPassword(e.target.value);
+                if (passwordError) setPasswordError('');
+              }}
               disabled={isLoading}
             />
+            {passwordError && (
+              <p className="text-xs text-red-600 mt-1 font-medium">{passwordError}</p>
+            )}
           </div>
 
           <button

@@ -15,6 +15,8 @@ import {
   doc,
   getDocs,
   query,
+  where,
+  Query,
   orderBy,
   limit,
   writeBatch,
@@ -61,7 +63,7 @@ export function cleanPayload<T>(obj: T): T {
   if (Array.isArray(obj)) {
     return obj.map(cleanPayload) as unknown as T;
   }
-  const result: Record<string, any> = {};
+  const result: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(obj)) {
     if (value !== undefined) {
       result[key] = cleanPayload(value);
@@ -1293,7 +1295,11 @@ export async function fetchNetworkBloodRequests(
   firestoreInstance = db
 ): Promise<NetworkBloodRequest[]> {
   const reqsRef = collection(firestoreInstance, 'networkRequests');
-  const snap = await getDocs(reqsRef);
+  let q: Query = reqsRef;
+  if (filter?.requesterUid) {
+    q = query(reqsRef, where('requesterUid', '==', filter.requesterUid));
+  }
+  const snap = await getDocs(q);
   let requests = snap.docs.map((d) => d.data() as NetworkBloodRequest);
 
   if (filter?.requesterUid) {

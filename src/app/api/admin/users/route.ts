@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { adminAuth, adminDb } from '@/lib/firebaseAdmin';
 import { FieldValue } from 'firebase-admin/firestore';
 
-const ALLOWED_ADMIN_ROLES = ['patient', 'doctor', 'pharmacist'] as const;
+const ALLOWED_ADMIN_ROLES = ['patient', 'doctor', 'pharmacist', 'blood_bank'] as const;
 type AllowedRole = typeof ALLOWED_ADMIN_ROLES[number];
 
 /**
@@ -83,8 +83,8 @@ export async function GET(req: Request) {
       });
     }
 
-    // Sort users: admins first, then doctors, then pharmacists, then patients
-    const roleWeight: Record<string, number> = { admin: 0, doctor: 1, pharmacist: 2, patient: 3 };
+    // Sort users: admins first, then doctors, then pharmacists, then blood bank, then patients
+    const roleWeight: Record<string, number> = { admin: 0, doctor: 1, pharmacist: 2, blood_bank: 3, patient: 4 };
     userList.sort((a, b) => {
       const weightA = roleWeight[a.role] ?? 4;
       const weightB = roleWeight[b.role] ?? 4;
@@ -182,7 +182,7 @@ export async function PATCH(req: Request) {
       return NextResponse.json({ error: 'Validation error: newRole is required' }, { status: 400 });
     }
 
-    // 5. Validate role against strict allowlist (disallow admin and blood_bank)
+    // 5. Validate role against strict allowlist (disallow admin)
     if (!ALLOWED_ADMIN_ROLES.includes(newRole as AllowedRole)) {
       return NextResponse.json({ 
         error: `Invalid role '${newRole}'. Permitted roles through this interface are: ${ALLOWED_ADMIN_ROLES.join(', ')}` 

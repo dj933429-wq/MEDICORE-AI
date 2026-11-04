@@ -345,33 +345,49 @@ Medicore-AI is an AI-powered healthcare management platform built on Next.js 16 
 
 ---
 
-### Completed: Blood Bank Dashboard (`/dashboard/blood-bank`) Button Audit & Production Remediation
+### Completed: Phase 4C — Production QA Remediation (8 Critical Defects Resolved)
 
-#### 1. Root-Cause Analysis
-1. **Overview Quick Action Buttons ("Register Donor", "Record Donation", "Add Blood Unit", "Submit Blood Request")**:
-   - `OverviewTab.tsx` action buttons called `onOpenModal(modal)`, which set `activeModal = 'donor' | 'donation' | 'inventory' | 'request'`, but did NOT switch `activeTab` from `'overview'`.
-   - Because modals were conditionally rendered inside their respective tab components (`{activeTab === 'donors'} && <DonorsTab ... />`), no modal was mounted in the DOM when clicked from Overview.
-2. **Firestore `Unsupported field value: undefined` Crash on Submissions**:
-   - In `DonorsTab.tsx` and other form handlers, optional text inputs passed `field: value || undefined`.
-   - Firebase JS SDK strictly rejects `undefined` document fields, causing `WriteBatch.set()` to crash (`Unsupported field value: undefined (found in field nationalIdOrPassport...)`).
-3. **Center ID Disconnect**:
-   - `DEFAULT_BLOOD_BANK_CENTER_ID` in `constants.ts` defaulted to `'center-primary'`, whereas `NetworkTab.tsx` and exhibition seeds use `'center-metropolis-central'`.
-   - This caused inventory and records to be fetched from `center-primary` (empty), making it impossible to see stock or accept network requests for Metropolis Central.
-4. **Seed Exhibition Network Data Blocked by Client Rules**:
-   - Client-side execution of `seedExhibitionNetworkData()` was blocked by Firestore rules disallowing `blood_bank` role from creating `networkRequests` (only `patient`/`doctor`) and creating `/bloodBank/{centerId}` centers.
-5. **Login Navigation Race Condition**:
-   - In `src/app/login/page.tsx`, `handleLogin` previously used a 1-second `setTimeout` to push `/dashboard`, causing a race condition on network latency where `/dashboard` bounced the user back to `/login` before `user.role` resolved.
+#### 1. Scope & Verified Defects
+Tested and confirmed 8 genuine issues identified during live QA testing of `https://medicore-ai-gules.vercel.app/`:
+1. **Blood Bank Firestore Permissions**: Pure custom claim checking denied access for blood bank staff accounts lacking server-minted Auth claims.
+2. **Appointment Date/Time State Reset**: Background auth state changes (`loading && !patientDoc`) caused `PatientDashboard` unmounting, wiping datetime form state; UTC ISO date string calculation invalidated local inputs.
+3. **Patient Blood Request Persistence**: Querying root-level `/networkRequests` collection without an explicit `where('requesterUid', '==', currentUser.uid)` constraint caused Firestore rules rejection.
+4. **Shortage Broadcast Datetime**: `toISOString().slice(0, 16)` generated UTC timestamps, defaulting `<input type="datetime-local">` to a past time in timezones ahead of UTC (e.g., IST).
+5. **Donor DOB Validation & Missing Weight**: `validateDonorPayload` threw `BloodBankValidationError` whose field errors were swallowed by generic error string handlers; `weightKg` was missing from schema, types, rules, and UI.
+6. **Pharmacist Expiry Validation**: `<input type="month">` rejected non-`YYYY-MM` formats from OCR text scanner (e.g., `"NOV 26"`, `"11/2026"`), breaking medicine additions.
+7. **Admin Blood Bank Role Gap**: `ALLOWED_ADMIN_ROLES` in `/api/admin/users/route.ts` and `AdminDashboard.tsx` omitted `'blood_bank'`, preventing role assignment.
+8. **Signup Validation Feedback**: `SignupPage` lacked client-side email format validation, `minLength={6}` for passwords, and specific inline error displays.
 
-#### 2. Actionable Remediation Implemented
-- **Step 1:** Added recursive `cleanPayload(obj)` in `src/lib/blood-bank/firestore-service.ts` to automatically strip any `undefined` properties before writing to Firestore.
-- **Step 2:** Updated `DEFAULT_BLOOD_BANK_CENTER_ID` in `constants.ts` to `'center-metropolis-central'`.
-- **Step 3:** Updated `src/app/dashboard/blood-bank/page.tsx` with `handleOpenModal`, switching `activeTab` to `'donors'`, `'donations'`, `'inventory'`, or `'requests'` before opening the corresponding modal dialog.
-- **Step 4:** Implemented server-side route `src/app/api/blood-bank/seed-exhibition/route.ts` using `adminDb` to seed complete demo exhibition data (centers, requests, units, donors, donations) reliably.
-- **Step 5:** Fixed `DonationsTab.tsx` donor dropdown to display `d.donorReferenceId`.
-- **Step 6:** Updated `firestore.rules` (and deployed to production `medicore-ai-exhibition`) to permit exhibition inventory, centers, and network requests.
-- **Step 7:** Made login routing in `src/app/login/page.tsx` deterministic by directly fetching `role` from `/users/{uid}` upon authentication and routing directly to the role dashboard.
-- **Step 8:** Authored and verified full Playwright E2E suites:
-  - `tests/e2e/blood-bank-button-audit.spec.ts`: **100% PASS** on localhost and Live Vercel Production (`https://medicore-ai-gules.vercel.app`).
-  - `tests/e2e/auth-rbac.spec.ts`: **11/11 PASS (100%)** on localhost and Live Vercel Production.
+#### 2. Technical Remediation Actions
+- **`firestore.rules`**:
+  - Enhanced `hasRole(roleName)` with a fallback to verified `/users/{uid}.role` profile projection when custom claims have not yet propagated.
+  - Added `weightKg` to `match /donors/{donorId}` allowed keys and validation rule (`weightKg >= 30 && weightKg <= 250`).
+  - Deployed to `medicore-ai-exhibition` production.
+- **`src/lib/blood-bank/firestore-service.ts`**:
+  - Updated `fetchNetworkBloodRequests` to construct `query(reqsRef, where('requesterUid', '==', filter.requesterUid))` when filtered by requester UID.
+- **`src/app/dashboard/PatientDashboard.tsx`**:
+  - Fixed loading guard to `if (loading && !patientDoc)` to prevent unmounting and input state wipe.
+  - Replaced generic 3-field alert with granular field error indicators.
+  - Localized `min` attribute on date picker.
+- **`src/app/dashboard/patient/components/PatientBloodPortal.tsx`**:
+  - Implemented `formatLocalDatetime(d)` to populate local timezone wall-clock time for required-by dates (+24h targeted, +12h broadcast).
+- **`src/app/dashboard/pharmacist/page.tsx`**:
+  - Implemented `normalizeExpiryToYearMonth(raw)` parsing `YYYY-MM`, `MM/YYYY`, `MM/YY`, and month abbreviations (`"NOV 26"` -> `"2026-11"`).
+  - Wired into manual medicine addition and OCR result extraction.
+- **`src/lib/blood-bank/types.ts` & `src/lib/blood-bank/validation.ts`**:
+  - Added `weightKg?: number` to `BloodDonor`.
+  - Added range check (30–250 kg) and clinical deferral check (<50 kg must be deferred) to `validateDonorPayload`.
+- **`src/app/dashboard/blood-bank/components/DonorsTab.tsx`**:
+  - Added `weightKg` to form state, payload submit, and table display.
+  - Unpacked `fieldErrors` from `BloodBankValidationError` for granular, actionable user feedback.
+- **`src/app/api/admin/users/route.ts` & `src/app/dashboard/AdminDashboard.tsx`**:
+  - Added `'blood_bank'` to `ALLOWED_ADMIN_ROLES` and `roleWeight`.
+  - Added `<option value="blood_bank">Blood Bank Staff</option>` and styled badge in `AdminDashboard.tsx`.
+- **`src/app/signup/page.tsx`**:
+  - Added email regex validation, password `minLength={6}`, inline field errors, and Firebase error code translation.
+- **Production Build & Verification**:
+  - `npx tsc --noEmit`: 0 Errors.
+  - `npm run lint`: 0 Errors.
+  - `npm run build`: Successful compilation across all 18 routes.
 
 
