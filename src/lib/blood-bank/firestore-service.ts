@@ -216,9 +216,24 @@ export async function fetchInventory(centerId = DEFAULT_BLOOD_BANK_CENTER_ID): P
  */
 export async function createInventoryUnit(
   payload: Omit<BloodInventoryUnit, 'centerId' | 'createdAt' | 'updatedAt'>,
-  actor: { uid: string; email?: string }
+  actor: { uid: string; email?: string },
+  firestoreInstance = db
 ): Promise<BloodInventoryUnit> {
   validateInventoryUnitPayload(payload);
+
+  // Critical Issue A: New inventory units must strictly start in 'available' status
+  if (payload.status !== 'available') {
+    throw new BloodBankValidationError(
+      `New inventory units must be created with status 'available'. Received status: '${payload.status}'.`
+    );
+  }
+
+  // Critical Issue A: New inventory units cannot carry injected reservation/fulfillment metadata
+  if (payload.reservedForRequestId) {
+    throw new BloodBankValidationError(
+      'New inventory units cannot be created with an initial reservation (reservedForRequestId must not be set).'
+    );
+  }
 
   const centerId = DEFAULT_BLOOD_BANK_CENTER_ID;
   const now = new Date().toISOString();
@@ -230,28 +245,62 @@ export async function createInventoryUnit(
     updatedAt: now,
   };
 
-  const unitRef = doc(db, 'bloodBank', centerId, 'inventory', newUnit.id);
-  const donRef = doc(db, 'bloodBank', centerId, 'donations', newUnit.donationId);
-  const { auditRef, fullEvent } = createAuditRefAndEvent(centerId, {
-    actorUid: actor.uid,
-    actorEmail: actor.email,
-    actorRole: 'blood_bank',
-    action: 'INVENTORY_UNIT_CREATED',
-    entity: 'inventory',
-    entityId: newUnit.id,
-    details: {
-      bloodGroup: newUnit.bloodGroup,
-      componentType: newUnit.componentType,
-      expiryDate: newUnit.expiryDate,
-      status: newUnit.status,
+  const unitRef = doc(firestoreInstance, 'bloodBank', centerId, 'inventory', newUnit.id);
+  const donRef = doc(firestoreInstance, 'bloodBank', centerId, 'donations', newUnit.donationId);
+  const { auditRef, fullEvent } = createAuditRefAndEvent(
+    centerId,
+    {
+      actorUid: actor.uid,
+      actorEmail: actor.email,
+      actorRole: 'blood_bank',
+      action: 'INVENTORY_UNIT_CREATED',
+      entity: 'inventory',
+      entityId: newUnit.id,
+      details: {
+        bloodGroup: newUnit.bloodGroup,
+        componentType: newUnit.componentType,
+        expiryDate: newUnit.expiryDate,
+        status: newUnit.status,
+      },
     },
-  });
+    firestoreInstance
+  );
 
-  await runTransaction(db, async (tx) => {
-    // Verify originating donation exists
+  await runTransaction(firestoreInstance, async (tx) => {
+    // 1. Verify originating donation exists
     const donSnap = await tx.get(donRef);
     if (!donSnap.exists()) {
       throw new BloodBankValidationError(`Referenced donation session ${newUnit.donationId} does not exist.`);
+    }
+
+    const donData = donSnap.data() as BloodDonation;
+
+    // Critical Issue C: Verify center provenance consistency
+    if (donData.centerId !== centerId) {
+      throw new BloodBankValidationError(
+        `Referenced donation session ${newUnit.donationId} belongs to center '${donData.centerId}', not '${centerId}'.`
+      );
+    }
+
+    // Critical Issue C: Screening verification - must be 'tested_passed'
+    if (donData.screeningStatus !== 'tested_passed') {
+      throw new BloodBankValidationError(
+        `Cannot create inventory from donation ${newUnit.donationId}: screening status is '${donData.screeningStatus}', but must be 'tested_passed'.`
+      );
+    }
+
+    // Critical Issue C: Donor ID match
+    if (donData.donorId !== newUnit.donorId) {
+      throw new BloodBankValidationError(
+        `Inventory donor ID '${newUnit.donorId}' does not match donation donor ID '${donData.donorId}'.`
+      );
+    }
+
+    // Critical Issue C: Blood group match
+    if (donData.bloodGroup !== newUnit.bloodGroup) {
+      throw new BloodBankValidationError(
+        `Inventory blood group '${newUnit.bloodGroup}' does not match donation blood group '${donData.bloodGroup}'.`
+      );
     }
 
     const unitExistingSnap = await tx.get(unitRef);
@@ -585,6 +634,14 @@ export async function createDistribution(
         );
       }
     }
+
+    // CLINICAL ALLOCATION COMPATIBILITY BOUNDARY:
+    // Operational software manages stock reservation and lifecycle transitions.
+    // Final immunological compatibility (ABO/Rh typing, crossmatching, antibody screening)
+    // and blood component clinical indication verification are clinical laboratory procedures
+    // performed physically by authorized laboratory personnel. Authorized staff sign-off
+    // (authorizedStaffUid) and mandatory temperature log verification (temperatureLogVerified)
+    // certify that staff have verified clinical compatibility and cold chain prior to dispatch.
 
     // 2. Transactional writes
     tx.set(distRef, newDistribution);

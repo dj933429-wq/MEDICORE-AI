@@ -1,4 +1,4 @@
-# Project Blueprint: MEDICORE-AI
+﻿# Project Blueprint: MEDICORE-AI
 
 ## Overview
 Medicore-AI is an AI-powered healthcare management platform built on Next.js 16 (App Router), React 19, Tailwind CSS v4, and Firebase (Authentication & Cloud Firestore). It provides strict role-based dashboards to manage users, patients, medical history timelines, pharmacy inventory, and appointments cleanly and securely.
@@ -24,14 +24,14 @@ Medicore-AI is an AI-powered healthcare management platform built on Next.js 16 
 
 ## Change History & Implementation Status
 
-### Completed: Phase 1 â€” Security Hardening & Repository Cleanup
+### Completed: Phase 1 Ã¢â‚¬â€ Security Hardening & Repository Cleanup
 - **Safe Environment:** Created recovery branch `backup/pre-hardening-main` and active branch `security/phase-1-hardening`.
 - **Repository Sanitization:** Untracked `firebase-debug.log` from Git index. Hardened `.gitignore` to ignore `*.log`, `.firebase/`, and whitelist `.env.example`.
 - **Client Key Isolation:** Removed `next.config.js` with client-leaking `GEMINI_API_KEY`.
 - **Config & Build Stability:** Consolidated on `next.config.ts`, pinned `sharp@0.33.5`, fixed Next.js root inference.
 - **ESLint & Code Health:** Resolved all ESLint errors.
 
-### Completed: Phase 1.1 â€” Security Remediation & Verification
+### Completed: Phase 1.1 Ã¢â‚¬â€ Security Remediation & Verification
 - **Firestore Rules Overhaul:** Fixed all 6 identified vulnerabilities in `firestore.rules`:
   1. Restricted `users/{userId}` to owner/admin; limited directory query to doctor role.
   2. Blocked pharmacist reads on `/patients/{patientId}` documents.
@@ -40,19 +40,19 @@ Medicore-AI is an AI-powered healthcare management platform built on Next.js 16 
   5. Enforced appointment field diffing: patients can only cancel; doctors can only update status/clinical fields; identity keys are immutable.
   6. Enforced append-only clinical records (cannot be modified or deleted by patients) and blocked user role self-escalation.
 - **Role Provisioning Design:** Implemented Custom Claims architecture (`request.auth.token.role`) in rules and `AuthProvider`, with safe legacy fallback. Hardened `signup()` to enforce `role: 'patient'` on public registration, storing privileged role requests in `requestedRole` for admin approval.
-- **Automated Security Test Suite:** Implemented `tests/firestore-security.test.mjs` using `@firebase/rules-unit-testing@5.0.2`. Executed 17 test assertions across Categories Aâ€“F against local Firestore emulator with **17/17 passing**.
+- **Automated Security Test Suite:** Implemented `tests/firestore-security.test.mjs` using `@firebase/rules-unit-testing@5.0.2`. Executed 17 test assertions across Categories AÃ¢â‚¬â€œF against local Firestore emulator with **17/17 passing**.
 - **TypeScript Resolution:** Completely removed `ignoreBuildErrors: true` from `next.config.ts`. Fixed underlying TypeScript type errors in `DoctorDashboard.tsx` and `PatientDashboard.tsx`. Verified `npx tsc --noEmit` (0 errors) and `npm run build` (compiled clean in 2.7s across all 9 static routes).
 - **Deliverables Authored:** Generated `PHASE_1_1_REMEDIATION_REPORT.md` documenting verified results, history cleanup instructions, and gate check for Phase 2.
 
-### Completed: Phase 1.2 â€” Final Security Remediation
+### Completed: Phase 1.2 Ã¢â‚¬â€ Final Security Remediation
 - **Pharmacist Access Elimination:** Removed `isPharmacist() ||` from `/patients/{patientId}`. Pharmacists are strictly prohibited from browsing patient clinical/demographic profiles while preserving billing creation workflows.
 - **Appointment Scoping Hardened:** Eliminated the open `'doctorId' in resource.data && 'date' in resource.data` rule. Implemented separate `get` and `list` rules: patients can only access their own appointments (`patientId == request.auth.uid`), doctors can only access assigned appointments (`doctorId == request.auth.uid`), and open collection queries across patients are denied.
 - **Pure Custom Claims Enforcement:** Completely removed the Firestore document fallback (`users/{uid}.role`) for privileged permissions in `firestore.rules`. `isAdmin()`, `isDoctor()`, `isPharmacist()`, and `isBloodBank()` now rely strictly on `request.auth.token.role == roleName`.
 - **AuthProvider Hardening:** Updated `src/lib/auth.js` to ensure privileged roles (`admin`, `doctor`, `pharmacist`, `blood_bank`) originate strictly from verified Custom Claims (`tokenResult.claims.role`). Users with unverified or missing claims default to `role: 'patient'`, preventing unauthorized dashboard escalation.
-- **Expanded Test Suite (34/34 PASS):** Expanded `tests/firestore-security.test.mjs` to 34 assertions across Categories Aâ€“H, verifying negative access for pharmacists browsing patients, unrelated users reading appointments, and users with doc roles but lacking custom claims.
+- **Expanded Test Suite (34/34 PASS):** Expanded `tests/firestore-security.test.mjs` to 34 assertions across Categories AÃ¢â‚¬â€œH, verifying negative access for pharmacists browsing patients, unrelated users reading appointments, and users with doc roles but lacking custom claims.
 - **Clean Build & Types:** Verified `npm run test:security` (34/34 PASS), `npm run lint` (0 errors), `npx tsc --noEmit` (0 errors), and `npm run build` (successful compilation in 3.9s).
 
-### Completed: Phase 1.3 â€” Final Privacy Hardening (Lookup Directory Separation)
+### Completed: Phase 1.3 Ã¢â‚¬â€ Final Privacy Hardening (Lookup Directory Separation)
 - **Directory Projections Separated:** Completely isolated private user documents from directory queries.
   - `publicDoctorProfiles/{doctorId}`: Contains only non-sensitive scheduling data (`name`, `specialization`, `profileImage`, `availability`). Read allowed for all authenticated users; create/update restricted to doctor owner or admin.
   - `pharmacyPatientLookup/{patientId}`: Contains only minimal dispensing metadata (`displayName`, `patientReference`). Read restricted to authorized pharmacists and admin. Write restricted to patient owner binding `patientReference == request.auth.uid`.
@@ -62,7 +62,7 @@ Medicore-AI is an AI-powered healthcare management platform built on Next.js 16 
 
 ---
 
-### Completed: Phase 1.4 â€” Permanent Git History Cleanup
+### Completed: Phase 1.4 Ã¢â‚¬â€ Permanent Git History Cleanup
 - **Phase 1 Commit Local Pinning:** Staged and committed all approved Phase 1 hardening code on `security/phase-1-hardening` (commit `887dbd3`).
 - **Private Recovery Backup:** Generated and verified full repository local Git bundle `MEDICORE-AI-pre-history-cleanup.bundle` containing all 8 references.
 - **Clean Clone Isolation & Filter-Repo:** Cloned repository into isolated directory `MEDICORE-AI-history-clean`, tracked all remote branches (`main` and `ai-upgrade`), resolved Python Windows config-parser split issue, and executed `git filter-repo --invert-paths --path firebase-debug.log --force`.
@@ -75,7 +75,7 @@ Medicore-AI is an AI-powered healthcare management platform built on Next.js 16 
 
 ## Planned Future Phases
 
-### Completed: Phase 2 â€” Firebase Infrastructure Restoration
+### Completed: Phase 2 Ã¢â‚¬â€ Firebase Infrastructure Restoration
 - **New Exhibition Project Provisioned:** Created fresh Firebase Project `medicore-ai-exhibition` (Display Name: `MEDICORE-AI Exhibition`, Project Number: `82891599621`) via Firebase MCP. Revoked project completely decommissioned.
 - **Web App Registered:** Created `MEDICORE-AI Web` (`1:82891599621:web:dd96c5facd93fb27ea516c`).
 - **Environment Secured:** Populated `.env.local` with fresh web client configuration. Retained server-side `GEMINI_API_KEY`. Verified `.gitignore` prevents secret leaks.
@@ -85,7 +85,7 @@ Medicore-AI is an AI-powered healthcare management platform built on Next.js 16 
 - **Custom Claims Architecture & Initial Admin Provisioning:** Verified trusted claims workflow using Firebase MCP `auth_update_user`. Initial permanent administrator provisioned for `dj933429@gmail.com` (UID: `ugImegYwx0aL317wYJLXUbhkWGP2`) with verified claim `{"role": "admin"}`.
 - **Verification & Certification:** 45/45 tests passing on Firestore emulator, 0 ESLint errors, 0 TypeScript errors, clean Next.js 16 production build.
 
-### Completed: Phase 2.1 â€” Live Firebase Integration Verification
+### Completed: Phase 2.1 Ã¢â‚¬â€ Live Firebase Integration Verification
 - **Live Authentication Verified:** Executed synthetic patient registration, session persistence, re-authentication, and account cleanup against medicore-ai-exhibition.
 - **Live Firestore CRUD Verified:** Verified profile creation (users/{uid}), patient record creation (patients/{uid}), pharmacy lookup synchronization (pharmacyPatientLookup/{uid}), public doctor profile queries (publicDoctorProfiles), and appointment creation (ppointments).
 - **Live Security Rules Enforcement Verified:** Confirmed that unauthorized reads on foreign user documents and unauthorized writes on publicDoctorProfiles are rejected with PERMISSION_DENIED by the live ruleset.
@@ -94,7 +94,7 @@ Medicore-AI is an AI-powered healthcare management platform built on Next.js 16 
 
 ---
 
-### Completed: Phase 2.3 â€” Admin Role Management System
+### Completed: Phase 2.3 Ã¢â‚¬â€ Admin Role Management System
 - **Server-Only Firebase Admin SDK (`src/lib/firebaseAdmin.ts`):** Initialized Firebase Admin SDK with support for Application Default Credentials (ADC) and environment-injected service account keys (`FIREBASE_SERVICE_ACCOUNT_KEY`). Configured server-only protection to ensure zero client-side credential exposure.
 - **Secure Admin API Route (`src/app/api/admin/users/route.ts`):**
   - `GET`: Authenticates admin ID tokens, verifies `decodedToken.role === 'admin'`, and retrieves all users with their authoritative Custom Claims merged with profile metadata.
@@ -107,7 +107,7 @@ Medicore-AI is an AI-powered healthcare management platform built on Next.js 16 
 
 ---
 
-### Completed: Phase 3.1 — Menstrual Health Management Module (Sprint 1 Closure)
+### Completed: Phase 3.1 â€” Menstrual Health Management Module (Sprint 1 Closure)
 - **Status:** Complete, Accepted & Verified via Full Browser Interaction Audit.
 - **Architecture Overview:**
   - Integrated 4-screen suite directly into Next.js 16 App Router under `/dashboard/menstrual-health/*`.
@@ -117,7 +117,7 @@ Medicore-AI is an AI-powered healthcare management platform built on Next.js 16 
 
 - **Working Routes:**
   1. **Overview (`/dashboard/menstrual-health`):**
-     - Current cycle day indicator (`Day 14` in Demo, `Day —` in New-User).
+     - Current cycle day indicator (`Day 14` in Demo, `Day â€”` in New-User).
      - Circular SVG Cycle Wheel visualizing follicular, ovulatory, luteal, and menstrual phases.
      - Cycle statistics summary (Average length, variation, last period, next estimated window).
      - Daily wellness snapshot bento and Quick Log modal for rapid flow/symptom check-in.
@@ -148,7 +148,7 @@ Medicore-AI is an AI-powered healthcare management platform built on Next.js 16 
   - Demo Mode initialized on Day 14 with 8 cycles; New-User mode shows genuine empty states.
   - Mode switching confirmed 100% data isolation without leakage.
   - Inverted date ranges and overlapping periods rejected with inline validation.
-  - Adding a period dynamically updates history and reactive cycle counts in Insights (8 → 9 cycles).
+  - Adding a period dynamically updates history and reactive cycle counts in Insights (8 â†’ 9 cycles).
   - Saving and editing daily journal entries updates Calendar selected date pane and Overview check-in snapshot.
   - Calendar month navigation (Prev, Next, Today) and day inspection drawer verified.
   - Insights 3M/6M/All filters, cycle log table toggle, and CSV export verified.
@@ -162,7 +162,7 @@ Medicore-AI is an AI-powered healthcare management platform built on Next.js 16 
 
 ---
 
-### Completed: Phase 3.2 — Cycle Calculation Engine (Sprint 2A)
+### Completed: Phase 3.2 â€” Cycle Calculation Engine (Sprint 2A)
 - **Status:** Complete, Independently Tested (39/39 Unit Tests PASS) & Integrated.
 - **Core Pure Calculation Engine (`src/lib/menstrual-health/calculations.ts`):**
   - **Zero Timezone Shift Arithmetic:** Implemented `daysBetween`, `addDaysToDate`, `isValidISODateString`, and `parseISODate` using deterministic UTC midnight calculations. Eliminates all local daylight-savings transitions and timezone off-by-one errors across month boundaries, year boundaries, and leap years (e.g. Feb 29 in 2024 vs 2025).
@@ -171,7 +171,7 @@ Medicore-AI is an AI-powered healthcare management platform built on Next.js 16 
   - **Prediction & Uncertainty Range:** Implemented `estimateNextPeriodWindow` deriving the statistical expectation window ($[\text{est} - \delta, \text{est} + \delta]$) based on personal historical variation. Communicates graded confidence rating (`low`, `moderate`, `high`) and mandatory medical/prediction disclaimer (not medical advice, no confirmed ovulation, no hormone claims, no contraception guidance).
   - **Data Sufficiency Guardrails:** Classified into 4 clinical levels (`none`, `insufficient`, `minimal`, `sufficient`). Prevents fabrication of statistics when completed cycles < 2.
 - **Clinical Validation & Guardrails (`validatePeriodRecord`):**
-  - Configurable clinical thresholds based on FIGO Menstrual Disorders Committee guidelines (`DEFAULT_CYCLE_THRESHOLDS`: normal cycle 21–35 days, normal period 2–8 days, max plausible duration 14 days, max cycle 90 days).
+  - Configurable clinical thresholds based on FIGO Menstrual Disorders Committee guidelines (`DEFAULT_CYCLE_THRESHOLDS`: normal cycle 21â€“35 days, normal period 2â€“8 days, max plausible duration 14 days, max cycle 90 days).
   - Hard errors for invalid date strings, inverted dates (end < start), duplicate start dates, overlapping date spans, and implausible durations (> 14 days).
   - Non-blocking advisory warnings for unusually short (< 21d) or long (> 35d) cycle intervals, or short (< 2d) / long (> 8d) period durations, ensuring honest patient tracking is never silently discarded.
 - **Automated Unit Test Suite (`tests/cycle-engine.test.mjs` / `npm run test:cycle`):**
@@ -186,7 +186,7 @@ Medicore-AI is an AI-powered healthcare management platform built on Next.js 16 
 
 ---
 
-### Completed: Phase 3.3 — Calculation Validation & Prediction Refinement (Sprint 2B)
+### Completed: Phase 3.3 â€” Calculation Validation & Prediction Refinement (Sprint 2B)
 - **Status:** Complete, Independently Validated (44/44 Unit Tests PASS, 25/25 Browser Checks PASS) & Integrated.
 - **Statistical Interpretation Review & Bessel's Correction:**
   - **Sample vs. Population Standard Deviation:** Replaced population standard deviation ($\sigma = \sqrt{\sum(x - \mu)^2 / N}$) with **Sample Standard Deviation** using Bessel's correction ($s = \sqrt{\sum(x - \bar{x})^2 / (N - 1)}$).
@@ -206,7 +206,7 @@ Medicore-AI is an AI-powered healthcare management platform built on Next.js 16 
   - **Level 0 (`'none'`, 0 periods):** Empty profile; all calculation capabilities false; limitations communicate that period dates are required.
   - **Level 1 (`'insufficient'`, 1 period):** 0 completed cycle intervals; cycle length cannot be calculated; period bleeding duration can be calculated if an `endDate` is logged; next-period prediction is provisional 28-day baseline.
   - **Level 2 (`'minimal'`, 2 periods):** Exactly 1 completed cycle interval; average cycle length can be calculated; variation and sample standard deviation require $\ge 2$ intervals (reported as `null`).
-  - **Level 3 (`'sufficient'`, $\ge 3$ periods):** $\ge 2$ completed cycle intervals; average cycle length, range, and sample standard deviation ($s$) computable. Labeled **"Variation Calculable"** for 2–5 completed intervals. The 6+ completed intervals threshold is designated as **"More Tracking History Available"** as an *application-level reference* for longer tracking history, explicitly clarifying that it is not a clinically established threshold or a guarantee of predictive accuracy.
+  - **Level 3 (`'sufficient'`, $\ge 3$ periods):** $\ge 2$ completed cycle intervals; average cycle length, range, and sample standard deviation ($s$) computable. Labeled **"Variation Calculable"** for 2â€“5 completed intervals. The 6+ completed intervals threshold is designated as **"More Tracking History Available"** as an *application-level reference* for longer tracking history, explicitly clarifying that it is not a clinically established threshold or a guarantee of predictive accuracy.
 - **Verification Levels Distinction (Statistical vs. Clinical Validation):**
   1. **Calculation Verification:** Automated unit tests (`npm run test:cycle`, 46 tests) verify deterministic mathematical behavior, calendar arithmetic, Bessel's correction, and edge case scenarios.
   2. **Software Verification:** Automated and manual browser interaction suites (`browser-audit.cjs`, 25 tests; `npm run test:admin`, 13 tests) verify application behavior, state reactivity, UI navigation, and system integration.
@@ -220,7 +220,7 @@ Medicore-AI is an AI-powered healthcare management platform built on Next.js 16 
   - *Month & Year boundaries:* Validated crossing month boundaries (Oct 31 $\to$ Nov 28) and year transitions (Dec 28, 2026 $\to$ Jan 25, 2027).
 - **UI & Shared State Integration:**
   - *Overview (`/dashboard/menstrual-health`):* Displays next period estimation window with history description, sample standard deviation, presentation cap notice when $s > 7$ days, and the required non-diagnostic disclaimer.
-  - *Insights (`/insights`):* Enhanced sufficiency banner rendering 4-level badges (Level 0–3), contextual guidance ("Variation Calculable" vs "More Tracking History"), explicit application-level reference notice, and the non-diagnostic disclaimer.
+  - *Insights (`/insights`):* Enhanced sufficiency banner rendering 4-level badges (Level 0â€“3), contextual guidance ("Variation Calculable" vs "More Tracking History"), explicit application-level reference notice, and the non-diagnostic disclaimer.
   - *Calendar (`/calendar`):* Maintains synchronized state, date sidebar, and month navigation.
 - **Sprint 2B Quality Gates & Verification:**
   - 46/46 Cycle Engine unit tests passing (`npm run test:cycle`).
@@ -232,7 +232,7 @@ Medicore-AI is an AI-powered healthcare management platform built on Next.js 16 
 
 ---
 
-### Completed: Phase 3.3 — Complete Application Vercel Deployment
+### Completed: Phase 3.3 â€” Complete Application Vercel Deployment
 - **Status:** Complete, Deployed & Verified in Production.
 - **Platform & Project Details:**
   - **Platform:** Vercel (CLI 65.10.0, Hobby Plan)
@@ -261,7 +261,7 @@ Medicore-AI is an AI-powered healthcare management platform built on Next.js 16 
   - `users/{userId}/menstrualRecords/{recordId}`: Document ID deterministically formatted as `period_{startDate}` (e.g., `period_2026-03-01`).
     - Schema: `id`, `startDate` (YYYY-MM-DD), `endDate` (optional YYYY-MM-DD), `flow` ('light'|'medium'|'heavy'), `notes` (optional string $\le 1000$ chars), `source` ('user'|'demo'), `createdAt`, `updatedAt`.
   - `users/{userId}/menstrualLogs/{logId}`: Document ID deterministically formatted as `log_{date}` (e.g., `log_2026-03-01`).
-    - Schema: `id`, `date` (YYYY-MM-DD), `symptoms` (list of strings $\le 15$ items), `mood` (optional enum), `energy` (optional integer 1–5), `sleepHours` (optional number 0–24), `sleepQuality` (optional enum), `notes` (optional string $\le 2000$ chars), `createdAt`, `updatedAt`.
+    - Schema: `id`, `date` (YYYY-MM-DD), `symptoms` (list of strings $\le 15$ items), `mood` (optional enum), `energy` (optional integer 1â€“5), `sleepHours` (optional number 0â€“24), `sleepQuality` (optional enum), `notes` (optional string $\le 2000$ chars), `createdAt`, `updatedAt`.
 - **Security & Authorization Model (`firestore.rules`):**
   - **Strict Patient Role Enforcement:** Evaluated via helper `isStrictPatientOwner(userId)`:
     - User is authenticated: `request.auth != null`.
@@ -288,7 +288,7 @@ Medicore-AI is an AI-powered healthcare management platform built on Next.js 16 
 
 ---
 
-### Completed: Phase 4A — Isolated Blood Bank Foundation
+### Completed: Phase 4A â€” Isolated Blood Bank Foundation
 - **Status:** Complete & Verified on branch eature/blood-bank-management (Commit: 5a6ead0eef6745463f8f8fd00bc19ee0c2248c3e).
 - **Core Deliverables:**
   - Strict TypeScript models and constants in src/lib/blood-bank/types.ts and constants.ts.
@@ -301,23 +301,43 @@ Medicore-AI is an AI-powered healthcare management platform built on Next.js 16 
 
 ---
 
-### In Progress: Phase 4A.1 — Hardening Review
-- **Status:** In Progress (Worktree ../MEDICORE-AI-blood-bank, branch eature/blood-bank-management).
-- **Scope & Hardening Objectives:**
-  1. **Git Audit:** Reconcile commit SHA documentation to published head 5a6ead0eef6745463f8f8fd00bc19ee0c2248c3e.
-  2. **Atomic Writes:** Refactor irestore-service.ts to utilize Firestore transactions (
-unTransaction) and atomic write batches (writeBatch), guaranteeing that operational writes, donor counts, inventory unit updates, and audit trail events are all atomic and crash-resistant.
-  3. **Rules Hardening:** Strengthen docs/phase-4/blood-bank-firestore-rules.fragment with strict .hasOnly([...]) field lists, type validations, document/center ID invariants, field immutability, in-rules inventory state transition enforcement, and relationship existence checks.
-  4. **Clinical Baseline & Data Minimization:** Refactor constants.ts, alidation.ts, 	ypes.ts, and UI components so operational parameters are explicitly marked as guidelines rather than clinical policy. Implement data minimization via donorReferenceId to avoid mandatory collection of sensitive government IDs, and require manual staff approval for unit expiry dates.
-  5. **Verification & Testing:** Expand security rules test suite and rerun all 268+ tests, lint, TypeScript, and production build.
-- **Status:** In Progress (Strict Isolation Mode in worktree ../MEDICORE-AI-blood-bank on branch eature/blood-bank-management).
-- **Baseline Commit:** ee00a5b5701a2bb1abf77a958cb3c488c887657 (Phase 3 Menstrual Health Foundation).
-- **Core Architecture & Isolation Plan:**
-  - **Zero Regression Guarantee:** Zero modifications to existing auth providers (src/lib/auth.js), root routing (Dashboard.tsx, layout.tsx, Navbar.tsx), existing dashboards (Doctor, Patient, Pharmacist, Admin), menstrual health modules, or existing irestore.rules.
-  - **Isolated Route & Guard:** Independent route /dashboard/blood-bank with direct access guard utilizing useAuth(). Unauthenticated users redirected to /login; authenticated users without verified Custom Claim 
-ole === 'blood_bank' denied access with dedicated explanatory refusal view.
-  - **Domain Architecture:** Strict TypeScript models for Donors, Donations, Inventory Units, Blood Requests, Distribution/Issues, and Audit Logs in src/lib/blood-bank/types.ts.
-  - **Non-Automated Clinical Guardrail:** System strictly records staff-verified and laboratory-tested outcomes. No automated clinical eligibility or transfusion compatibility decisions are computed by software.
-  - **Firestore Namespace Isolation:** Draft rules proposed in docs/phase-4/blood-bank-firestore-rules.fragment for namespace loodBank/{centerId}/** with append-only audit trail and strict cross-role denial.
-  - **Dashboard Modules:** 7 dedicated operational views with honest empty states (Overview, Donors, Donations, Inventory, Requests, Distribution, Reports).
-  - **Testing Strategy:** Independent emulator test suite in 	ests/blood-bank/ with temporary combined rules fixture and zero synthetic production data writes. Full regression pass on existing suites.
+### Completed: Phase 4A.6 — Final Security Closure
+- **Status:** Complete & Verified on branch `feature/blood-bank-management` (Commit: `aade955263a0bc19de9e0e8d8099542766bcd64a`).
+- **Core Deliverables:**
+  - Hardened `docs/phase-4/blood-bank-firestore-rules.fragment` closing Attack A (Cancellation Bypass), Attack B (Cross-Request Reuse), and Attack C (Unallocated Issue creation).
+  - Extended security test suite with Category J (11 dedicated tests, 75/75 total passing).
+  - Full 8-suite regression passing clean (0 errors).
+
+---
+
+### In Progress: Phase 4A.7 — Inventory Creation & Lifecycle Security Closure
+- **Status:** In Progress (Strict Isolation Mode in worktree `../MEDICORE-AI-blood-bank` on branch `feature/blood-bank-management`).
+- **Starting HEAD:** `aade955263a0bc19de9e0e8d8099542766bcd64a`.
+- **Scope & Security Closure Plan:**
+  1. **Critical Issue A (Direct Creation of Impossible Inventory States):**
+     - Restrict `match /inventory/{unitId}` `allow create` rule strictly to `request.resource.data.status == 'available'`.
+     - Explicitly prohibit initial non-available statuses: `transfused`, `reserved`, `quarantine`, `expired`, `discarded`.
+     - Prohibit injected reservation, allocation, distribution, or fulfillment metadata (`reservedForRequestId` must not be present or must be null).
+  2. **Critical Issue B (Delivery Lifecycle Bypass):**
+     - Prevent attack where an adversary attempts an atomic batch/transaction to create inventory directly as `transfused`, attach to an existing request, add to `fulfilledUnitIds`, and mark request `partially_fulfilled`/`fulfilled`.
+  3. **Critical Issue C (Donation Provenance & Screening Verification):**
+     - Enforce in Firestore rules that referenced donation exists, belongs to same center (`centerId`), has `screeningStatus == 'tested_passed'`, donorId matches (`don.donorId == request.resource.data.donorId`), and bloodGroup matches (`don.bloodGroup == request.resource.data.bloodGroup`).
+     - Mirror checks in `createInventoryUnit()` service layer.
+  4. **Critical Issue D (Legitimate Reservation Transition):**
+     - Enforce that units cannot start `reserved`; reservation must only occur via valid transition from `available` for an approved/partially_fulfilled request, atomic with request allocation.
+  5. **Clinical Allocation Compatibility:**
+     - Inspect `createDistribution()` and document the clear boundary between operational inventory reservation and physical laboratory compatibility verification by licensed staff.
+  6. **Automated Security Tests (Category K):**
+     - Add Category K tests to `tests/blood-bank/blood-bank-security.test.mjs` verifying:
+       - Deny creation with status `transfused`, `reserved`, `expired`, `discarded`.
+       - Deny creation with `available` status but forged `reservedForRequestId`.
+       - Deny creation referencing nonexistent donation, cross-center donation, donorId mismatch, blood group mismatch.
+       - Deny creation referencing unscreened donation (`screeningStatus: 'pending'`) or failed donation (`screeningStatus: 'tested_failed'`).
+       - Deny delivery lifecycle bypass (atomic batch creating transfused unit + marking request fulfilled).
+       - Allow legitimate creation of `available` unit from `tested_passed` donation with matching donor and blood group.
+       - Allow legitimate reservation transition from `available` via distribution transaction.
+  7. **Full 8-Suite Verification & Delivery:**
+     - Run all 8 verification suites.
+     - Document in `docs/phase-4/PHASE_4A_7_INVENTORY_LIFECYCLE_SECURITY_REPORT.md`.
+     - Commit and push to `origin/feature/blood-bank-management`.
+

@@ -1,5 +1,5 @@
-/**
- * MEDICORE-AI — Isolated Blood Bank Firestore Security Rules Suite
+﻿/**
+ * MEDICORE-AI â€” Isolated Blood Bank Firestore Security Rules Suite
  * FILE: tests/blood-bank/blood-bank-security.test.mjs
  * (Phase 4A.1 Hardened Security Assertions)
  *
@@ -1643,7 +1643,7 @@ async function runBloodBankSecuritySuite() {
     });
   });
 
-  // Test J1: Attack A — Two-unit cancellation bypass attempt (DENIED)
+  // Test J1: Attack A â€” Two-unit cancellation bypass attempt (DENIED)
   await test('J1: Deny cancellation bypass attempt where unit remains reserved or fulfilled IDs are injected', async () => {
     const cId = 'center-primary';
     const batch = writeBatch(staff);
@@ -1661,7 +1661,7 @@ async function runBloodBankSecuritySuite() {
     await assertFails(batch.commit());
   });
 
-  // Test J2: Attack A — Legitimate cancellation workflow where all units are released to available (SUCCEEDS)
+  // Test J2: Attack A â€” Legitimate cancellation workflow where all units are released to available (SUCCEEDS)
   await test('J2: Legitimate cancellation workflow where all units are released to available succeeds', async () => {
     const cId = 'center-primary';
     const batch = writeBatch(staff);
@@ -1687,7 +1687,7 @@ async function runBloodBankSecuritySuite() {
     await assertSucceeds(batch.commit());
   });
 
-  // Test J3: Attack B — Cross-request fulfillment attempt using a previously transfused unit (DENIED)
+  // Test J3: Attack B â€” Cross-request fulfillment attempt using a previously transfused unit (DENIED)
   await test('J3: Deny cross-request fulfillment attempt using unit transfused for another request', async () => {
     const cId = 'center-primary';
     await assertFails(updateDoc(doc(staff, 'bloodBank', cId, 'requests', 'req_j3_a'), {
@@ -1697,7 +1697,7 @@ async function runBloodBankSecuritySuite() {
     }));
   });
 
-  // Test J4: Attack B — Legitimate delivery & fulfillment of a correctly reserved unit (SUCCEEDS)
+  // Test J4: Attack B â€” Legitimate delivery & fulfillment of a correctly reserved unit (SUCCEEDS)
   await test('J4: Legitimate delivery and fulfillment of a correctly reserved unit succeeds', async () => {
     const cId = 'center-primary';
     const batch = writeBatch(staff);
@@ -1720,7 +1720,7 @@ async function runBloodBankSecuritySuite() {
     await assertSucceeds(batch.commit());
   });
 
-  // Test J5: Attack C — Issue creation attempt using a unit reserved for another request (DENIED)
+  // Test J5: Attack C â€” Issue creation attempt using a unit reserved for another request (DENIED)
   await test('J5: Deny issue creation attempt using a unit reserved for another request', async () => {
     const cId = 'center-primary';
     await assertFails(setDoc(doc(staff, 'bloodBank', cId, 'issues', 'issue_j5_malicious'), {
@@ -1737,7 +1737,7 @@ async function runBloodBankSecuritySuite() {
     }));
   });
 
-  // Test J6: Attack C — Issue creation attempt using an unallocated unit (DENIED)
+  // Test J6: Attack C â€” Issue creation attempt using an unallocated unit (DENIED)
   await test('J6: Deny issue creation attempt using an unallocated unit', async () => {
     const cId = 'center-primary';
     await assertFails(setDoc(doc(staff, 'bloodBank', cId, 'issues', 'issue_j6_unallocated'), {
@@ -1754,7 +1754,7 @@ async function runBloodBankSecuritySuite() {
     }));
   });
 
-  // Test J7: Attack C — Issue creation attempt with duplicate unit IDs (DENIED)
+  // Test J7: Attack C â€” Issue creation attempt with duplicate unit IDs (DENIED)
   await test('J7: Deny issue creation attempt with duplicate unit IDs in same issue', async () => {
     const cId = 'center-primary';
     const batch = writeBatch(staff);
@@ -1777,7 +1777,7 @@ async function runBloodBankSecuritySuite() {
     await assertFails(batch.commit());
   });
 
-  // Test J8: Attack C — Legitimate allocation-to-issue workflow (SUCCEEDS)
+  // Test J8: Attack C â€” Legitimate allocation-to-issue workflow (SUCCEEDS)
   await test('J8: Legitimate allocation-to-issue workflow succeeds', async () => {
     const cId = 'center-primary';
     const batch = writeBatch(staff);
@@ -1810,6 +1810,442 @@ async function runBloodBankSecuritySuite() {
     await assertSucceeds(batch.commit());
   });
 
+  // =========================================================================
+  // Category K: Inventory Creation & Lifecycle Security Closure (Phase 4A.7)
+  // Critical Issue A (Impossible States), Critical Issue B (Delivery Bypass),
+  // Critical Issue C (Donation Screening Provenance), Critical Issue D (Legitimate Reservation)
+  // =========================================================================
+  console.log('\n--- Category K: Inventory Creation & Lifecycle Security Closure (Phase 4A.7) ---');
+
+  await testEnv.withSecurityRulesDisabled(async (context) => {
+    const adminDb = context.firestore();
+    const cId = 'center-primary';
+
+    // 1. Setup donor for provenance verification
+    await setDoc(doc(adminDb, 'bloodBank', cId, 'donors', 'donor_k'), {
+      id: 'donor_k',
+      centerId: cId,
+      donorReferenceId: 'DON-2026-K001',
+      fullName: 'Donor K Provenance',
+      dateOfBirth: '1992-05-15',
+      gender: 'female',
+      bloodGroup: 'O+',
+      contact: { phone: '555-0199', email: 'donor_k@example.com' },
+      eligibilityStatus: 'eligible',
+      donationCount: 1,
+      verifiedByStaffUid: 'staff_bloodbank_1',
+      createdAt: '2026-03-01T10:00:00Z',
+      updatedAt: '2026-03-01T10:00:00Z',
+    });
+
+    // 2. Setup tested_passed donation
+    await setDoc(doc(adminDb, 'bloodBank', cId, 'donations', 'donation_k_passed'), {
+      id: 'donation_k_passed',
+      centerId: cId,
+      donorId: 'donor_k',
+      donorReferenceId: 'DON-2026-K001',
+      donorName: 'Donor K Provenance',
+      bloodGroup: 'O+',
+      donationDate: '2026-03-01T10:00:00Z',
+      volumeMl: 450,
+      collectionStatus: 'completed',
+      screeningStatus: 'tested_passed',
+      collectionStaffUid: 'staff_bloodbank_1',
+      createdAt: '2026-03-01T10:00:00Z',
+      updatedAt: '2026-03-01T10:00:00Z',
+    });
+
+    // 3. Setup unscreened (pending) donation
+    await setDoc(doc(adminDb, 'bloodBank', cId, 'donations', 'donation_k_pending'), {
+      id: 'donation_k_pending',
+      centerId: cId,
+      donorId: 'donor_k',
+      donorReferenceId: 'DON-2026-K001',
+      donorName: 'Donor K Provenance',
+      bloodGroup: 'O+',
+      donationDate: '2026-03-01T10:00:00Z',
+      volumeMl: 450,
+      collectionStatus: 'completed',
+      screeningStatus: 'pending',
+      collectionStaffUid: 'staff_bloodbank_1',
+      createdAt: '2026-03-01T10:00:00Z',
+      updatedAt: '2026-03-01T10:00:00Z',
+    });
+
+    // 4. Setup failed screening donation
+    await setDoc(doc(adminDb, 'bloodBank', cId, 'donations', 'donation_k_failed'), {
+      id: 'donation_k_failed',
+      centerId: cId,
+      donorId: 'donor_k',
+      donorReferenceId: 'DON-2026-K001',
+      donorName: 'Donor K Provenance',
+      bloodGroup: 'O+',
+      donationDate: '2026-03-01T10:00:00Z',
+      volumeMl: 450,
+      collectionStatus: 'completed',
+      screeningStatus: 'tested_failed',
+      collectionStaffUid: 'staff_bloodbank_1',
+      createdAt: '2026-03-01T10:00:00Z',
+      updatedAt: '2026-03-01T10:00:00Z',
+    });
+
+    // 5. Setup cross-center donation (belongs to center-secondary)
+    await setDoc(doc(adminDb, 'bloodBank', 'center-secondary', 'donations', 'donation_k_cross'), {
+      id: 'donation_k_cross',
+      centerId: 'center-secondary',
+      donorId: 'donor_k',
+      donorReferenceId: 'DON-2026-K001',
+      donorName: 'Donor K Provenance',
+      bloodGroup: 'O+',
+      donationDate: '2026-03-01T10:00:00Z',
+      volumeMl: 450,
+      collectionStatus: 'completed',
+      screeningStatus: 'tested_passed',
+      collectionStaffUid: 'staff_bloodbank_1',
+      createdAt: '2026-03-01T10:00:00Z',
+      updatedAt: '2026-03-01T10:00:00Z',
+    });
+
+    // 6. Setup requests for bypass and legitimate test
+    await setDoc(doc(adminDb, 'bloodBank', cId, 'requests', 'req_k_bypass'), {
+      id: 'req_k_bypass',
+      centerId: cId,
+      requestingOrganization: 'County General ICU',
+      bloodGroup: 'O+',
+      componentType: 'whole_blood',
+      quantityUnits: 1,
+      urgency: 'routine',
+      requiredByDate: '2026-03-05T10:00:00Z',
+      status: 'approved',
+      allocatedUnitIds: [],
+      fulfilledUnitIds: [],
+      createdAt: '2026-03-01T10:00:00Z',
+      updatedAt: '2026-03-01T10:00:00Z',
+    });
+
+    await setDoc(doc(adminDb, 'bloodBank', cId, 'requests', 'req_k_legit'), {
+      id: 'req_k_legit',
+      centerId: cId,
+      requestingOrganization: 'County General ICU',
+      bloodGroup: 'O+',
+      componentType: 'whole_blood',
+      quantityUnits: 1,
+      urgency: 'routine',
+      requiredByDate: '2026-03-05T10:00:00Z',
+      status: 'approved',
+      allocatedUnitIds: [],
+      fulfilledUnitIds: [],
+      createdAt: '2026-03-01T10:00:00Z',
+      updatedAt: '2026-03-01T10:00:00Z',
+    });
+  });
+
+  // K1-K5: Adversarial direct creation with non-available statuses (Issue A)
+  await test('K1: Deny direct creation of inventory unit with status "transfused"', async () => {
+    await assertFails(setDoc(doc(staff, 'bloodBank', 'center-primary', 'inventory', 'unit_k_transfused'), {
+      id: 'unit_k_transfused',
+      centerId: 'center-primary',
+      donationId: 'donation_k_passed',
+      donorId: 'donor_k',
+      bloodGroup: 'O+',
+      componentType: 'whole_blood',
+      collectionDate: '2026-03-01',
+      expiryDate: '2026-04-05',
+      volumeMl: 450,
+      storageLocation: 'Cold Room 1',
+      status: 'transfused',
+      createdAt: '2026-03-01T10:00:00Z',
+      updatedAt: '2026-03-01T10:00:00Z',
+    }));
+  });
+
+  await test('K2: Deny direct creation of inventory unit with status "reserved"', async () => {
+    await assertFails(setDoc(doc(staff, 'bloodBank', 'center-primary', 'inventory', 'unit_k_reserved'), {
+      id: 'unit_k_reserved',
+      centerId: 'center-primary',
+      donationId: 'donation_k_passed',
+      donorId: 'donor_k',
+      bloodGroup: 'O+',
+      componentType: 'whole_blood',
+      collectionDate: '2026-03-01',
+      expiryDate: '2026-04-05',
+      volumeMl: 450,
+      storageLocation: 'Cold Room 1',
+      status: 'reserved',
+      createdAt: '2026-03-01T10:00:00Z',
+      updatedAt: '2026-03-01T10:00:00Z',
+    }));
+  });
+
+  await test('K3: Deny direct creation of inventory unit with status "expired"', async () => {
+    await assertFails(setDoc(doc(staff, 'bloodBank', 'center-primary', 'inventory', 'unit_k_expired'), {
+      id: 'unit_k_expired',
+      centerId: 'center-primary',
+      donationId: 'donation_k_passed',
+      donorId: 'donor_k',
+      bloodGroup: 'O+',
+      componentType: 'whole_blood',
+      collectionDate: '2026-03-01',
+      expiryDate: '2026-04-05',
+      volumeMl: 450,
+      storageLocation: 'Cold Room 1',
+      status: 'expired',
+      createdAt: '2026-03-01T10:00:00Z',
+      updatedAt: '2026-03-01T10:00:00Z',
+    }));
+  });
+
+  await test('K4: Deny direct creation of inventory unit with status "discarded"', async () => {
+    await assertFails(setDoc(doc(staff, 'bloodBank', 'center-primary', 'inventory', 'unit_k_discarded'), {
+      id: 'unit_k_discarded',
+      centerId: 'center-primary',
+      donationId: 'donation_k_passed',
+      donorId: 'donor_k',
+      bloodGroup: 'O+',
+      componentType: 'whole_blood',
+      collectionDate: '2026-03-01',
+      expiryDate: '2026-04-05',
+      volumeMl: 450,
+      storageLocation: 'Cold Room 1',
+      status: 'discarded',
+      createdAt: '2026-03-01T10:00:00Z',
+      updatedAt: '2026-03-01T10:00:00Z',
+    }));
+  });
+
+  await test('K5: Deny direct creation of inventory unit with status "quarantine"', async () => {
+    await assertFails(setDoc(doc(staff, 'bloodBank', 'center-primary', 'inventory', 'unit_k_quarantine'), {
+      id: 'unit_k_quarantine',
+      centerId: 'center-primary',
+      donationId: 'donation_k_passed',
+      donorId: 'donor_k',
+      bloodGroup: 'O+',
+      componentType: 'whole_blood',
+      collectionDate: '2026-03-01',
+      expiryDate: '2026-04-05',
+      volumeMl: 450,
+      storageLocation: 'Cold Room 1',
+      status: 'quarantine',
+      createdAt: '2026-03-01T10:00:00Z',
+      updatedAt: '2026-03-01T10:00:00Z',
+    }));
+  });
+
+  // K6-K7: Injected reservation and lifecycle metadata (Issue A)
+  await test('K6: Deny direct creation with status "available" but forged reservedForRequestId', async () => {
+    await assertFails(setDoc(doc(staff, 'bloodBank', 'center-primary', 'inventory', 'unit_k_forged_res'), {
+      id: 'unit_k_forged_res',
+      centerId: 'center-primary',
+      donationId: 'donation_k_passed',
+      donorId: 'donor_k',
+      bloodGroup: 'O+',
+      componentType: 'whole_blood',
+      collectionDate: '2026-03-01',
+      expiryDate: '2026-04-05',
+      volumeMl: 450,
+      storageLocation: 'Cold Room 1',
+      status: 'available',
+      reservedForRequestId: 'req_k_bypass',
+      createdAt: '2026-03-01T10:00:00Z',
+      updatedAt: '2026-03-01T10:00:00Z',
+    }));
+  });
+
+  await test('K7: Deny direct creation with unauthorized extra lifecycle fields (e.g. fulfilledRequestId)', async () => {
+    await assertFails(setDoc(doc(staff, 'bloodBank', 'center-primary', 'inventory', 'unit_k_forged_fields'), {
+      id: 'unit_k_forged_fields',
+      centerId: 'center-primary',
+      donationId: 'donation_k_passed',
+      donorId: 'donor_k',
+      bloodGroup: 'O+',
+      componentType: 'whole_blood',
+      collectionDate: '2026-03-01',
+      expiryDate: '2026-04-05',
+      volumeMl: 450,
+      storageLocation: 'Cold Room 1',
+      status: 'available',
+      fulfilledRequestId: 'req_k_bypass',
+      createdAt: '2026-03-01T10:00:00Z',
+      updatedAt: '2026-03-01T10:00:00Z',
+    }));
+  });
+
+  // K8: Critical Issue B — Delivery Lifecycle Bypass via atomic batch attempt
+  await test('K8: Deny atomic delivery lifecycle bypass attempt creating transfused unit to mark request fulfilled', async () => {
+    const batch = writeBatch(staff);
+    batch.set(doc(staff, 'bloodBank', 'center-primary', 'inventory', 'unit_k_bypass'), {
+      id: 'unit_k_bypass',
+      centerId: 'center-primary',
+      donationId: 'donation_k_passed',
+      donorId: 'donor_k',
+      bloodGroup: 'O+',
+      componentType: 'whole_blood',
+      collectionDate: '2026-03-01',
+      expiryDate: '2026-04-05',
+      volumeMl: 450,
+      storageLocation: 'Cold Room 1',
+      status: 'transfused',
+      reservedForRequestId: 'req_k_bypass',
+      createdAt: '2026-03-01T10:00:00Z',
+      updatedAt: '2026-03-01T10:00:00Z',
+    });
+    batch.update(doc(staff, 'bloodBank', 'center-primary', 'requests', 'req_k_bypass'), {
+      status: 'fulfilled',
+      fulfilledUnitIds: ['unit_k_bypass'],
+      updatedAt: '2026-03-01T10:00:00Z',
+    });
+
+    await assertFails(batch.commit());
+
+    // Verify request is untouched
+    const reqSnap = await getDoc(doc(staff, 'bloodBank', 'center-primary', 'requests', 'req_k_bypass'));
+    if (reqSnap.data().status !== 'approved' || (reqSnap.data().fulfilledUnitIds && reqSnap.data().fulfilledUnitIds.length > 0)) {
+      throw new Error('Security Violation: Target request was modified during failed batch bypass!');
+    }
+
+    // Verify unit was not created
+    const unitSnap = await getDoc(doc(staff, 'bloodBank', 'center-primary', 'inventory', 'unit_k_bypass'));
+    if (unitSnap.exists()) {
+      throw new Error('Security Violation: Unit was created during failed batch bypass!');
+    }
+  });
+
+  // K9-K13: Critical Issue C — Donation Provenance & Screening Verification
+  await test('K9: Deny inventory creation referencing unscreened donation (screeningStatus: "pending")', async () => {
+    await assertFails(setDoc(doc(staff, 'bloodBank', 'center-primary', 'inventory', 'unit_k_from_pending'), {
+      id: 'unit_k_from_pending',
+      centerId: 'center-primary',
+      donationId: 'donation_k_pending',
+      donorId: 'donor_k',
+      bloodGroup: 'O+',
+      componentType: 'whole_blood',
+      collectionDate: '2026-03-01',
+      expiryDate: '2026-04-05',
+      volumeMl: 450,
+      storageLocation: 'Cold Room 1',
+      status: 'available',
+      createdAt: '2026-03-01T10:00:00Z',
+      updatedAt: '2026-03-01T10:00:00Z',
+    }));
+  });
+
+  await test('K10: Deny inventory creation referencing failed screening donation (screeningStatus: "tested_failed")', async () => {
+    await assertFails(setDoc(doc(staff, 'bloodBank', 'center-primary', 'inventory', 'unit_k_from_failed'), {
+      id: 'unit_k_from_failed',
+      centerId: 'center-primary',
+      donationId: 'donation_k_failed',
+      donorId: 'donor_k',
+      bloodGroup: 'O+',
+      componentType: 'whole_blood',
+      collectionDate: '2026-03-01',
+      expiryDate: '2026-04-05',
+      volumeMl: 450,
+      storageLocation: 'Cold Room 1',
+      status: 'available',
+      createdAt: '2026-03-01T10:00:00Z',
+      updatedAt: '2026-03-01T10:00:00Z',
+    }));
+  });
+
+  await test('K11: Deny inventory creation referencing cross-center donation session', async () => {
+    await assertFails(setDoc(doc(staff, 'bloodBank', 'center-primary', 'inventory', 'unit_k_cross_center'), {
+      id: 'unit_k_cross_center',
+      centerId: 'center-primary',
+      donationId: 'donation_k_cross',
+      donorId: 'donor_k',
+      bloodGroup: 'O+',
+      componentType: 'whole_blood',
+      collectionDate: '2026-03-01',
+      expiryDate: '2026-04-05',
+      volumeMl: 450,
+      storageLocation: 'Cold Room 1',
+      status: 'available',
+      createdAt: '2026-03-01T10:00:00Z',
+      updatedAt: '2026-03-01T10:00:00Z',
+    }));
+  });
+
+  await test('K12: Deny inventory creation with donorId mismatching donation donorId', async () => {
+    await assertFails(setDoc(doc(staff, 'bloodBank', 'center-primary', 'inventory', 'unit_k_mismatch_donor'), {
+      id: 'unit_k_mismatch_donor',
+      centerId: 'center-primary',
+      donationId: 'donation_k_passed',
+      donorId: 'donor_mismatch_attacker',
+      bloodGroup: 'O+',
+      componentType: 'whole_blood',
+      collectionDate: '2026-03-01',
+      expiryDate: '2026-04-05',
+      volumeMl: 450,
+      storageLocation: 'Cold Room 1',
+      status: 'available',
+      createdAt: '2026-03-01T10:00:00Z',
+      updatedAt: '2026-03-01T10:00:00Z',
+    }));
+  });
+
+  await test('K13: Deny inventory creation with bloodGroup mismatching donation bloodGroup', async () => {
+    await assertFails(setDoc(doc(staff, 'bloodBank', 'center-primary', 'inventory', 'unit_k_mismatch_bg'), {
+      id: 'unit_k_mismatch_bg',
+      centerId: 'center-primary',
+      donationId: 'donation_k_passed',
+      donorId: 'donor_k',
+      bloodGroup: 'B+',
+      componentType: 'whole_blood',
+      collectionDate: '2026-03-01',
+      expiryDate: '2026-04-05',
+      volumeMl: 450,
+      storageLocation: 'Cold Room 1',
+      status: 'available',
+      createdAt: '2026-03-01T10:00:00Z',
+      updatedAt: '2026-03-01T10:00:00Z',
+    }));
+  });
+
+  // K14: Legitimate creation from tested_passed donation
+  await test('K14: Legitimate inventory creation with status "available" from tested_passed donation SUCCEEDS', async () => {
+    await assertSucceeds(setDoc(doc(staff, 'bloodBank', 'center-primary', 'inventory', 'unit_k_legit'), {
+      id: 'unit_k_legit',
+      centerId: 'center-primary',
+      donationId: 'donation_k_passed',
+      donorId: 'donor_k',
+      bloodGroup: 'O+',
+      componentType: 'whole_blood',
+      collectionDate: '2026-03-01',
+      expiryDate: '2026-04-05',
+      volumeMl: 450,
+      storageLocation: 'Cold Room 1, Shelf K-1',
+      status: 'available',
+      createdAt: '2026-03-01T10:00:00Z',
+      updatedAt: '2026-03-01T10:00:00Z',
+    }));
+
+    const unitSnap = await getDoc(doc(staff, 'bloodBank', 'center-primary', 'inventory', 'unit_k_legit'));
+    if (!unitSnap.exists() || unitSnap.data().status !== 'available') {
+      throw new Error('Legitimate unit was not properly created');
+    }
+  });
+
+  // K15: Critical Issue D — Legitimate reservation transition atomic with request allocation
+  await test('K15: Legitimate reservation transition of available unit atomic with request allocation SUCCEEDS', async () => {
+    const batch = writeBatch(staff);
+    batch.update(doc(staff, 'bloodBank', 'center-primary', 'inventory', 'unit_k_legit'), {
+      status: 'reserved',
+      reservedForRequestId: 'req_k_legit',
+      updatedAt: '2026-03-01T11:00:00Z',
+    });
+    batch.update(doc(staff, 'bloodBank', 'center-primary', 'requests', 'req_k_legit'), {
+      allocatedUnitIds: ['unit_k_legit'],
+      updatedAt: '2026-03-01T11:00:00Z',
+    });
+
+    await assertSucceeds(batch.commit());
+
+    const unitSnap = await getDoc(doc(staff, 'bloodBank', 'center-primary', 'inventory', 'unit_k_legit'));
+    if (!unitSnap.exists() || unitSnap.data().status !== 'reserved' || unitSnap.data().reservedForRequestId !== 'req_k_legit') {
+      throw new Error('Unit failed to transition to reserved state');
+    }
+  });
+
   // Summary
   console.log('\n================================================================');
   const passCount = results.filter((r) => r.status === 'PASS').length;
@@ -1828,3 +2264,4 @@ runBloodBankSecuritySuite().catch((err) => {
   console.error('Test Suite encountered fatal error:', err);
   process.exit(1);
 });
+

@@ -171,6 +171,15 @@
         );
       }
 
+      // Helper function to verify that inventory creation references a valid tested donation session
+      function isValidInventoryDonation(centerId, donationId, donorId, bloodGroup) {
+        let don = get(/databases/$(database)/documents/bloodBank/$(centerId)/donations/$(donationId)).data;
+        return don.centerId == centerId
+          && don.screeningStatus == 'tested_passed'
+          && don.donorId == donorId
+          && don.bloodGroup == bloodGroup;
+      }
+
       // Center metadata document: read-only for authenticated blood bank staff
       allow read: if isAuthenticated() && isBloodBank();
       allow write: if false; // Center documents provisioned via Admin SDK only
@@ -308,9 +317,11 @@
             'statusReason', 'reservedForRequestId', 'createdAt', 'updatedAt'
           ])
           && exists(/databases/$(database)/documents/bloodBank/$(centerId)/donations/$(request.resource.data.donationId))
+          && isValidInventoryDonation(centerId, request.resource.data.donationId, request.resource.data.donorId, request.resource.data.bloodGroup)
           && request.resource.data.bloodGroup in ['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-']
           && request.resource.data.componentType in ['whole_blood', 'red_blood_cells', 'platelets', 'fresh_frozen_plasma', 'cryoprecipitate']
-          && request.resource.data.status in ['available', 'reserved', 'quarantine', 'transfused', 'expired', 'discarded']
+          && request.resource.data.status == 'available'
+          && (!('reservedForRequestId' in request.resource.data) || request.resource.data.reservedForRequestId == null)
           && request.resource.data.volumeMl is number
           && request.resource.data.volumeMl > 0
           && request.resource.data.expiryDate >= request.resource.data.collectionDate;
@@ -338,6 +349,11 @@
               resource.data.status == 'reserved'
               && resource.data.reservedForRequestId != null
               && getAfter(/databases/$(database)/documents/bloodBank/$(centerId)/requests/$(resource.data.reservedForRequestId)).data.fulfilledUnitIds.hasAny([unitId])
+            )
+          )
+          && (
+            request.resource.data.status != 'reserved' || (
+              request.resource.data.reservedForRequestId != null
             )
           )
           && (
