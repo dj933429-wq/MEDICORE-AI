@@ -19,6 +19,7 @@ export const AuthProvider = ({ children }) => {
     // Observable hook binding directly to Firebase Authentication
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
       if (firebaseUser) {
+        setLoading(true);
         try {
           // 1. Check for Trusted Custom Claims (Privileged Roles)
           const tokenResult = await firebaseUser.getIdTokenResult();
@@ -90,14 +91,15 @@ export const AuthProvider = ({ children }) => {
               }
 
               // Sync minimal pharmacy patient lookup record (displayName, patientReference)
-              const lookupRef = doc(db, 'pharmacyPatientLookup', firebaseUser.uid);
-              const lookupSnap = await getDoc(lookupRef);
-              if (!lookupSnap.exists()) {
+              try {
+                const lookupRef = doc(db, 'pharmacyPatientLookup', firebaseUser.uid);
                 await setDoc(lookupRef, {
                   displayName: userData.name || firebaseUser.displayName || firebaseUser.email?.split('@')[0] || 'Unknown',
                   patientReference: firebaseUser.uid,
                   createdAt: new Date().toISOString()
-                });
+                }, { merge: true });
+              } catch {
+                // Non-critical projection
               }
             } catch (patientErr) {
               console.error("Failed to sync patient profile or pharmacy lookup:", patientErr);
