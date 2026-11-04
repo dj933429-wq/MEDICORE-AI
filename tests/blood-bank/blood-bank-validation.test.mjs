@@ -14,6 +14,7 @@ import {
   validateDonorPayload,
   validateDonationPayload,
   isValidInventoryTransition,
+  isValidRequestTransition,
   validateInventoryUnitPayload,
   validateBloodRequestPayload,
   validateDistributionPayload,
@@ -201,11 +202,31 @@ const validDistribution = {
 };
 
 assertThrows(() => validateDistributionPayload({ ...validDistribution, issuedUnitIds: [] }), 'Rejects dispatch with empty unit list');
+assertThrows(() => validateDistributionPayload({ ...validDistribution, issuedUnitIds: ['UNIT-1', 'UNIT-1'] }), 'Rejects duplicate unit IDs in single distribution');
 assertThrows(() => validateDistributionPayload({ ...validDistribution, destinationOrganization: '' }), 'Requires destination facility');
 assertThrows(() => validateDistributionPayload({ ...validDistribution, authorizedStaffUid: '' }), 'Requires authorized staff UID');
 
 validateDistributionPayload(validDistribution);
 assert(true, 'Accepts valid distribution dispatch payload');
+
+// 6b. Request State Transition Matrix
+console.log('\n--- Suite 6b: Request State Transitions & Terminal Immutability ---');
+assert(isValidRequestTransition('submitted', 'under_review'), 'submitted -> under_review permitted');
+assert(isValidRequestTransition('submitted', 'approved'), 'submitted -> approved permitted');
+assert(isValidRequestTransition('submitted', 'rejected'), 'submitted -> rejected permitted');
+assert(isValidRequestTransition('submitted', 'cancelled'), 'submitted -> cancelled permitted');
+assert(isValidRequestTransition('under_review', 'approved'), 'under_review -> approved permitted');
+assert(isValidRequestTransition('approved', 'partially_fulfilled'), 'approved -> partially_fulfilled permitted');
+assert(isValidRequestTransition('approved', 'fulfilled'), 'approved -> fulfilled permitted');
+assert(isValidRequestTransition('partially_fulfilled', 'fulfilled'), 'partially_fulfilled -> fulfilled permitted');
+
+// Terminal states rejection
+assert(!isValidRequestTransition('fulfilled', 'submitted'), 'PROHIBITED: fulfilled cannot be reopened to submitted');
+assert(!isValidRequestTransition('fulfilled', 'approved'), 'PROHIBITED: fulfilled cannot transition back to approved');
+assert(!isValidRequestTransition('rejected', 'approved'), 'PROHIBITED: rejected cannot be reopened to approved');
+assert(!isValidRequestTransition('rejected', 'submitted'), 'PROHIBITED: rejected cannot be reopened to submitted');
+assert(!isValidRequestTransition('cancelled', 'approved'), 'PROHIBITED: cancelled cannot be reopened to approved');
+assert(!isValidRequestTransition('cancelled', 'submitted'), 'PROHIBITED: cancelled cannot be reopened to submitted');
 
 // 7. Clinical Guardrail Verification
 console.log('\n--- Suite 7: Non-Automated Clinical Guardrail ---');

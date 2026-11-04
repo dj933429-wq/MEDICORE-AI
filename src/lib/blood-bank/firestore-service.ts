@@ -38,6 +38,7 @@ import {
   validateBloodRequestPayload,
   validateDistributionPayload,
   isValidInventoryTransition,
+  isValidRequestTransition,
   BloodBankValidationError,
 } from './validation';
 
@@ -394,6 +395,11 @@ export async function updateRequestStatus(
     }
 
     const currentReq = snap.data() as BloodRequest;
+    if (!isValidRequestTransition(currentReq.status, newStatus)) {
+      throw new BloodBankValidationError(
+        `Invalid request status transition: cannot transition from '${currentReq.status}' to '${newStatus}'.`
+      );
+    }
 
     const { auditRef, fullEvent } = createAuditRefAndEvent(cId, {
       actorUid: actor.uid,
@@ -476,6 +482,30 @@ export async function createDistribution(
       throw new BloodBankValidationError(`Associated blood request ${payload.requestId} does not exist.`);
     }
 
+    const reqData = reqSnap.data() as BloodRequest;
+
+    // Terminal statuses cannot accept additional units
+    if (['fulfilled', 'rejected', 'cancelled'].includes(reqData.status)) {
+      throw new BloodBankValidationError(
+        `Cannot issue units against request ${payload.requestId} with terminal status '${reqData.status}'.`
+      );
+    }
+
+    // Ensure selected unit count does not exceed remaining quantity needed
+    const previouslyFulfilled = reqData.fulfilledUnitIds || [];
+    const remainingNeeded = reqData.quantityUnits - previouslyFulfilled.length;
+    if (payload.issuedUnitIds.length > remainingNeeded) {
+      throw new BloodBankValidationError(
+        `Cannot issue ${payload.issuedUnitIds.length} units: request only requires ${remainingNeeded} more unit(s) (total ${reqData.quantityUnits}, fulfilled ${previouslyFulfilled.length}).`
+      );
+    }
+
+    // Ensure selected unit IDs are strictly unique within this distribution
+    const uniqueUnitIds = new Set(payload.issuedUnitIds);
+    if (uniqueUnitIds.size !== payload.issuedUnitIds.length) {
+      throw new BloodBankValidationError('Selected unit IDs must be unique within a distribution.');
+    }
+
     const unitRefs = payload.issuedUnitIds.map((uId) => ({
       ref: doc(db, 'bloodBank', centerId, 'inventory', uId),
       id: uId,
@@ -488,10 +518,21 @@ export async function createDistribution(
         throw new BloodBankValidationError(`Selected inventory unit ${uSnap.id} does not exist.`);
       }
       const unitData = uSnap.data() as BloodInventoryUnit;
+
+      // Status check: must be 'available' or 'reserved'
       if (unitData.status !== 'available' && unitData.status !== 'reserved') {
         throw new BloodBankValidationError(
           `Unit ${uSnap.id} is currently in '${unitData.status}' status and cannot be issued.`
         );
+      }
+
+      // Unit reserved for another request must be rejected
+      if (unitData.status === 'reserved') {
+        if (!unitData.reservedForRequestId || unitData.reservedForRequestId !== payload.requestId) {
+          throw new BloodBankValidationError(
+            `Unit ${uSnap.id} is reserved for another request (${unitData.reservedForRequestId || 'unknown'}) and cannot be issued to request ${payload.requestId}.`
+          );
+        }
       }
     }
 
@@ -507,8 +548,6 @@ export async function createDistribution(
     }
 
     // Update request status based on fulfillment
-    const reqData = reqSnap.data() as BloodRequest;
-    const previouslyFulfilled = reqData.fulfilledUnitIds || [];
     const updatedFulfilled = Array.from(new Set([...previouslyFulfilled, ...payload.issuedUnitIds]));
     const isFullyFulfilled = updatedFulfilled.length >= reqData.quantityUnits;
 

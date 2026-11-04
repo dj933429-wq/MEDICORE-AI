@@ -407,6 +407,41 @@ async function runBloodBankSecuritySuite() {
     }));
   });
 
+  await test('D4b: Rejects unauthorized modification of protected donor fields (e.g. bloodGroup, dateOfBirth)', async () => {
+    await assertFails(updateDoc(doc(staff, 'bloodBank', 'center-primary', 'donors', 'donor_existing'), {
+      bloodGroup: 'AB-',
+      updatedAt: '2026-03-01T12:00:00Z',
+    }));
+  });
+
+  await test('D4c: Rejects unauthorized modification of protected donation fields (e.g. donorId, volumeMl)', async () => {
+    await assertFails(updateDoc(doc(staff, 'bloodBank', 'center-primary', 'donations', 'donation_existing'), {
+      volumeMl: 600,
+      updatedAt: '2026-03-01T12:00:00Z',
+    }));
+  });
+
+  await test('D4d: Rejects unauthorized modification of protected inventory fields (e.g. bloodGroup, donationId)', async () => {
+    await assertFails(updateDoc(doc(staff, 'bloodBank', 'center-primary', 'inventory', 'unit_existing'), {
+      bloodGroup: 'B-',
+      updatedAt: '2026-03-01T12:00:00Z',
+    }));
+  });
+
+  await test('D4e: Rejects unauthorized modification of protected request fields (e.g. quantityUnits, bloodGroup)', async () => {
+    await assertFails(updateDoc(doc(staff, 'bloodBank', 'center-primary', 'requests', 'req_existing'), {
+      quantityUnits: 20,
+      updatedAt: '2026-03-01T12:00:00Z',
+    }));
+  });
+
+  await test('D4f: Rejects unauthorized modification of protected issue fields (e.g. issuedUnitIds, authorizedStaffUid)', async () => {
+    await assertFails(updateDoc(doc(staff, 'bloodBank', 'center-primary', 'issues', 'dist_existing'), {
+      authorizedStaffUid: 'other_staff_uid',
+      updatedAt: '2026-03-01T12:00:00Z',
+    }));
+  });
+
   await test('D5: Rejects donation create referencing nonexistent donorId', async () => {
     await assertFails(setDoc(doc(staff, 'bloodBank', 'center-primary', 'donations', 'don_missing_donor'), {
       id: 'don_missing_donor',
@@ -499,6 +534,40 @@ async function runBloodBankSecuritySuite() {
 
     await assertFails(updateDoc(doc(staff, 'bloodBank', 'center-primary', 'inventory', 'unit_direct_jump'), {
       status: 'transfused', // ILLEGAL transition directly from available
+      updatedAt: '2026-03-01T12:00:00Z',
+    }));
+  });
+
+  await test('E4: Permitted request state transition: submitted -> approved', async () => {
+    await assertSucceeds(updateDoc(doc(staff, 'bloodBank', 'center-primary', 'requests', 'req_existing'), {
+      status: 'approved',
+      reviewerStaffUid: 'staff_bloodbank_1',
+      decisionNotes: 'Approved for OR',
+      updatedAt: '2026-03-01T12:00:00Z',
+    }));
+  });
+
+  await test('E5: Prohibited request state transition: terminal state cannot be reopened', async () => {
+    await testEnv.withSecurityRulesDisabled(async (context) => {
+      await setDoc(doc(context.firestore(), 'bloodBank', 'center-primary', 'requests', 'req_terminal_fulfilled'), {
+        id: 'req_terminal_fulfilled',
+        centerId: 'center-primary',
+        requestingOrganization: 'City Hospital',
+        bloodGroup: 'O+',
+        componentType: 'whole_blood',
+        quantityUnits: 2,
+        urgency: 'routine',
+        requiredByDate: '2026-03-01T10:00:00Z',
+        status: 'fulfilled',
+        fulfilledUnitIds: ['unit_1', 'unit_2'],
+        createdAt: '2026-03-01T10:00:00Z',
+        updatedAt: '2026-03-01T10:00:00Z',
+      });
+    });
+
+    // Attempt to reopen fulfilled request to submitted or approved
+    await assertFails(updateDoc(doc(staff, 'bloodBank', 'center-primary', 'requests', 'req_terminal_fulfilled'), {
+      status: 'approved',
       updatedAt: '2026-03-01T12:00:00Z',
     }));
   });

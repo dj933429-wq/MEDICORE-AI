@@ -30,6 +30,15 @@
           (fromStatus == 'expired' && toStatus in ['discarded']);
       }
 
+      // Helper function to enforce legal request state transition matrix in rules
+      function isValidRequestStateTransition(fromStatus, toStatus) {
+        return fromStatus == toStatus ||
+          (fromStatus == 'submitted' && toStatus in ['under_review', 'approved', 'rejected', 'cancelled']) ||
+          (fromStatus == 'under_review' && toStatus in ['approved', 'rejected', 'cancelled']) ||
+          (fromStatus == 'approved' && toStatus in ['partially_fulfilled', 'fulfilled', 'cancelled']) ||
+          (fromStatus == 'partially_fulfilled' && toStatus in ['fulfilled', 'cancelled']);
+      }
+
       // Center metadata document: read-only for authenticated blood bank staff
       allow read: if isAuthenticated() && isBloodBank();
       allow write: if false; // Center documents provisioned via Admin SDK only
@@ -69,6 +78,11 @@
           && request.resource.data.verifiedByStaffUid == request.auth.uid;
 
         allow update: if isAuthenticated() && isBloodBank()
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'fullName', 'nationalIdOrPassport', 'contact', 'eligibilityStatus',
+            'deferralReason', 'deferralUntil', 'lastDonationDate', 'donationCount',
+            'verifiedByStaffUid', 'updatedAt'
+          ])
           && request.resource.data.id == resource.data.id
           && request.resource.data.centerId == resource.data.centerId
           && request.resource.data.donorReferenceId == resource.data.donorReferenceId
@@ -117,6 +131,10 @@
           && request.resource.data.collectionStaffUid == request.auth.uid;
 
         allow update: if isAuthenticated() && isBloodBank()
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'donorName', 'donorReferenceId', 'collectionStatus', 'screeningStatus',
+            'screeningStaffUid', 'screeningNotes', 'adverseEventNotes', 'updatedAt'
+          ])
           && request.resource.data.id == resource.data.id
           && request.resource.data.centerId == resource.data.centerId
           && request.resource.data.donorId == resource.data.donorId
@@ -166,6 +184,10 @@
           && request.resource.data.expiryDate >= request.resource.data.collectionDate;
 
         allow update: if isAuthenticated() && isBloodBank()
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'expiryDate', 'volumeMl', 'storageLocation', 'status', 'statusReason',
+            'reservedForRequestId', 'updatedAt'
+          ])
           && request.resource.data.id == resource.data.id
           && request.resource.data.centerId == resource.data.centerId
           && request.resource.data.donationId == resource.data.donationId
@@ -213,6 +235,11 @@
           && request.resource.data.quantityUnits >= 1 && request.resource.data.quantityUnits <= 50;
 
         allow update: if isAuthenticated() && isBloodBank()
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'departmentOrWard', 'urgency', 'requiredByDate', 'status',
+            'clinicalIndication', 'reviewerStaffUid', 'decisionNotes',
+            'fulfilledUnitIds', 'updatedAt'
+          ])
           && request.resource.data.id == resource.data.id
           && request.resource.data.centerId == resource.data.centerId
           && request.resource.data.requestingOrganization == resource.data.requestingOrganization
@@ -226,7 +253,7 @@
             'status', 'clinicalIndication', 'reviewerStaffUid', 'decisionNotes',
             'fulfilledUnitIds', 'createdAt', 'updatedAt'
           ])
-          && request.resource.data.status in ['submitted', 'under_review', 'approved', 'partially_fulfilled', 'fulfilled', 'rejected', 'cancelled'];
+          && isValidRequestStateTransition(resource.data.status, request.resource.data.status);
 
         allow delete: if false; // Retain history in 'cancelled' or 'rejected' state
       }
@@ -260,6 +287,10 @@
           && request.resource.data.issuedUnitIds.size() > 0;
 
         allow update: if isAuthenticated() && isBloodBank()
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'departmentOrWard', 'dispatchStatus', 'transportReference',
+            'dispatchedAt', 'deliveredAt', 'notes', 'updatedAt'
+          ])
           && request.resource.data.id == resource.data.id
           && request.resource.data.centerId == resource.data.centerId
           && request.resource.data.requestId == resource.data.requestId

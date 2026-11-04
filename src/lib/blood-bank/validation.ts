@@ -224,6 +224,29 @@ export function isValidInventoryTransition(
 }
 
 /**
+ * Valid Blood Request State Transition Matrix
+ * Terminal states (fulfilled, rejected, cancelled) cannot be reopened.
+ */
+export const VALID_REQUEST_TRANSITIONS: Record<RequestStatus, readonly RequestStatus[]> = {
+  submitted: ['under_review', 'approved', 'rejected', 'cancelled'],
+  under_review: ['approved', 'rejected', 'cancelled'],
+  approved: ['partially_fulfilled', 'fulfilled', 'cancelled'],
+  partially_fulfilled: ['fulfilled', 'cancelled'],
+  fulfilled: [], // Terminal state
+  rejected: [],  // Terminal state
+  cancelled: [], // Terminal state
+};
+
+export function isValidRequestTransition(
+  currentStatus: RequestStatus,
+  newStatus: RequestStatus
+): boolean {
+  if (currentStatus === newStatus) return true;
+  const allowed = VALID_REQUEST_TRANSITIONS[currentStatus];
+  return Boolean(allowed && allowed.includes(newStatus));
+}
+
+/**
  * Validate Inventory Unit Payload
  */
 export function validateInventoryUnitPayload(data: Partial<BloodInventoryUnit>): void {
@@ -345,6 +368,11 @@ export function validateDistributionPayload(data: Partial<BloodDistribution>): v
 
   if (!Array.isArray(data.issuedUnitIds) || data.issuedUnitIds.length === 0) {
     errors.issuedUnitIds = 'At least one blood unit identifier must be selected for issue.';
+  } else {
+    const uniqueIds = new Set(data.issuedUnitIds);
+    if (uniqueIds.size !== data.issuedUnitIds.length) {
+      errors.issuedUnitIds = 'Selected blood unit identifiers must be unique within a single distribution.';
+    }
   }
 
   if (!data.authorizedStaffUid || typeof data.authorizedStaffUid !== 'string' || data.authorizedStaffUid.trim().length === 0) {

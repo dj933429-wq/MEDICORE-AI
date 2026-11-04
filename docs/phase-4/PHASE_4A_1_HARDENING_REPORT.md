@@ -11,10 +11,13 @@
 ## 1. Git Commit Discrepancy Resolution
 
 ### Verification:
-- **Local HEAD:** `5a6ead0eef6745463f8f8fd00bc19ee0c2248c3e`
-- **Remote `origin/feature/blood-bank-management` HEAD:** `5a6ead0eef6745463f8f8fd00bc19ee0c2248c3e`
-- **Audit Findings:** The Phase 4A implementation commit was successfully pushed to `origin/feature/blood-bank-management` under SHA `5a6ead0eef6745463f8f8fd00bc19ee0c2248c3e`. An earlier pre-amend hash (`50b305147ae3b26b68ab7dbad09b82c6a99c3312`) was erroneously referenced in preliminary text output.
-- **Action Taken:** Corrected the reference in `docs/phase-4/PHASE_4A_ISOLATED_FOUNDATION_REPORT.md` to reflect `5a6ead0eef6745463f8f8fd00bc19ee0c2248c3e` without rewriting published remote history or force-pushing.
+- **Baseline Commit (Phase 3 Menstrual Health):** `aee00a5b5701a2bb1abf77a958cb3c488c887657`
+- **Initial Phase 4A Implementation Commit:** `5a6ead0eef6745463f8f8fd00bc19ee0c2248c3e`
+- **Phase 4A.1 Hardening Commit (Current Branch Head):** `40fb82f8e2ca1ed9cfe0f597732781635fcfe513`
+- **Local HEAD:** `40fb82f8e2ca1ed9cfe0f597732781635fcfe513`
+- **Remote `origin/feature/blood-bank-management` HEAD:** `40fb82f8e2ca1ed9cfe0f597732781635fcfe513`
+- **Audit Findings:** The initial Phase 4A implementation commit was successfully pushed to `origin/feature/blood-bank-management` under SHA `5a6ead0eef6745463f8f8fd00bc19ee0c2248c3e`. An earlier pre-amend hash (`50b305147ae3b26b68ab7dbad09b82c6a99c3312`) was erroneously referenced in preliminary text output. The subsequent Phase 4A.1 hardening commit is `40fb82f8e2ca1ed9cfe0f597732781635fcfe513`.
+- **Action Taken:** Corrected the reference to distinguish between the initial Phase 4A commit (`5a6ead0...`) and the Phase 4A.1 hardening commit (`40fb82f...`) without rewriting published remote history or force-pushing.
 
 ---
 
@@ -145,3 +148,4 @@ In initial Phase 4A code, multi-document mutations (such as recording a donation
 
 > **CONFIRMATION:**
 > All four hardening requirements have been fulfilled. Operational writes are strictly atomic, the Firestore security rules fragment is hardened against schema bypasses and illegal state transitions, clinical values are strictly designated as advisory guidelines, and data minimization has been implemented. Zero modifications were made to the existing working application architecture or production Firebase services. Phase 4A.1 is complete.
+
