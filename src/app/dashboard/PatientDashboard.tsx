@@ -245,7 +245,7 @@ export default function PatientDashboard() {
         date: newAppt.date,
         time: newAppt.time,
         status: 'pending',
-        notes: newAppt.notes,
+        notes: newAppt.notes?.trim() || '',
         createdAt: serverTimestamp()
       };
 
@@ -254,8 +254,9 @@ export default function PatientDashboard() {
       setShowModal(false);
       setNewAppt({ doctorId: '', date: '', time: '', notes: '' });
     } catch (err: unknown) {
-      console.error(err);
-      setApptError("Failure dispatching scheduling request.");
+      console.error('[PatientDashboard] Appointment creation failed:', err);
+      const msg = err instanceof Error ? err.message : String(err);
+      setApptError(msg || "Failed to schedule appointment. Please try again.");
     } finally {
       setBooking(false);
     }
@@ -341,7 +342,7 @@ export default function PatientDashboard() {
               </Link>
             )}
             <button
-              onClick={() => setShowModal(true)}
+              onClick={() => { setApptError(''); setShowModal(true); }}
               className="bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 px-6 rounded-lg shadow-md transition-colors whitespace-nowrap"
             >
               + Book Appointment

@@ -326,8 +326,9 @@ export default function PharmacistDashboard() {
     e.preventDefault();
     if (!user) return;
     const finalExpiry = normalizeExpiryToYearMonth(expiry) || expiry.trim();
-    if (!name.trim() || !batch.trim() || !finalExpiry || !stock) {
-      setError('Please fill out all fields.');
+    const parsedStock = Number(stock);
+    if (!name.trim() || !batch.trim() || !finalExpiry || isNaN(parsedStock) || parsedStock <= 0) {
+      setError('Please fill out all fields. Stock quantity must be greater than 0.');
       return;
     }
     
@@ -337,10 +338,10 @@ export default function PharmacistDashboard() {
 
     try {
       await addDoc(collection(db, `inventory/${user.uid}/medicines`), {
-        name,
-        batch,
+        name: name.trim(),
+        batch: batch.trim(),
         expiry: finalExpiry,
-        stock: parseInt(stock, 10),
+        stock: parsedStock,
         createdBy: user.uid,
         createdAt: new Date()
       });
@@ -655,7 +656,7 @@ export default function PharmacistDashboard() {
                 <div>
                   <label className="block text-sm font-semibold text-slate-700 mb-2">Expiry Date</label>
                   <input 
-                    type="month"
+                    type="text"
                     placeholder="YYYY-MM" 
                     value={expiry}
                     onChange={(e) => setExpiry(e.target.value)}
