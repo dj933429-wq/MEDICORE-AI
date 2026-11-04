@@ -39,6 +39,13 @@
           (fromStatus == 'partially_fulfilled' && toStatus in ['fulfilled', 'cancelled']);
       }
 
+      // Helper function to enforce legal distribution/issue state transition matrix in rules
+      function isValidIssueStateTransition(fromStatus, toStatus) {
+        return fromStatus == toStatus ||
+          (fromStatus in ['prepared', 'dispatched'] && toStatus in ['dispatched', 'in_transit', 'delivered', 'cancelled']) ||
+          (fromStatus == 'in_transit' && toStatus in ['delivered', 'cancelled']);
+      }
+
       // Center metadata document: read-only for authenticated blood bank staff
       allow read: if isAuthenticated() && isBloodBank();
       allow write: if false; // Center documents provisioned via Admin SDK only
@@ -202,7 +209,11 @@
             'statusReason', 'reservedForRequestId', 'createdAt', 'updatedAt'
           ])
           && (
-            request.resource.data.status != 'transfused' || resource.data.status == 'reserved'
+            request.resource.data.status != 'transfused' || (
+              resource.data.status == 'reserved'
+              && resource.data.reservedForRequestId != null
+              && getAfter(/databases/$(database)/documents/bloodBank/$(centerId)/requests/$(resource.data.reservedForRequestId)).data.fulfilledUnitIds.hasAny([unitId])
+            )
           )
           && (
             resource.data.status != 'reserved' ||
@@ -261,7 +272,34 @@
             'status', 'clinicalIndication', 'reviewerStaffUid', 'decisionNotes',
             'fulfilledUnitIds', 'allocatedUnitIds', 'createdAt', 'updatedAt'
           ])
-          && isValidRequestStateTransition(resource.data.status, request.resource.data.status);
+          && isValidRequestStateTransition(resource.data.status, request.resource.data.status)
+          && (
+            !('fulfilledUnitIds' in resource.data) ||
+            request.resource.data.fulfilledUnitIds.hasAll(resource.data.fulfilledUnitIds)
+          )
+          && (
+            !('allocatedUnitIds' in resource.data) ||
+            resource.data.allocatedUnitIds.size() == 0 ||
+            request.resource.data.allocatedUnitIds.hasAll(resource.data.allocatedUnitIds) ||
+            request.resource.data.fulfilledUnitIds.hasAll(resource.data.allocatedUnitIds) ||
+            getAfter(/databases/$(database)/documents/bloodBank/$(centerId)/inventory/$(resource.data.allocatedUnitIds[0])).data.status in ['available', 'transfused']
+          )
+          && (
+            !(request.resource.data.status in ['partially_fulfilled', 'fulfilled']) || (
+              request.resource.data.fulfilledUnitIds is list &&
+              request.resource.data.fulfilledUnitIds.size() > 0 &&
+              (!('fulfilledUnitIds' in resource.data) || request.resource.data.fulfilledUnitIds.size() > resource.data.fulfilledUnitIds.size()) &&
+              (request.resource.data.status != 'fulfilled' || request.resource.data.fulfilledUnitIds.size() >= resource.data.quantityUnits) &&
+              (request.resource.data.status != 'partially_fulfilled' || request.resource.data.fulfilledUnitIds.size() < resource.data.quantityUnits) &&
+              getAfter(/databases/$(database)/documents/bloodBank/$(centerId)/inventory/$(request.resource.data.fulfilledUnitIds[0])).data.status == 'transfused'
+            )
+          )
+          && (
+            request.resource.data.status != 'cancelled' || (
+              (!('allocatedUnitIds' in resource.data) || resource.data.allocatedUnitIds.size() == 0) &&
+              (!('allocatedUnitIds' in request.resource.data) || request.resource.data.allocatedUnitIds.size() == 0)
+            )
+          );
 
         allow delete: if false; // Retain history in 'cancelled' or 'rejected' state
       }
@@ -289,7 +327,7 @@
           ])
           && exists(/databases/$(database)/documents/bloodBank/$(centerId)/requests/$(request.resource.data.requestId))
           && get(/databases/$(database)/documents/bloodBank/$(centerId)/requests/$(request.resource.data.requestId)).data.status in ['approved', 'partially_fulfilled']
-          && request.resource.data.dispatchStatus in ['prepared', 'dispatched', 'in_transit', 'delivered', 'cancelled']
+          && request.resource.data.dispatchStatus in ['prepared', 'dispatched', 'in_transit', 'cancelled']
           && request.resource.data.authorizedStaffUid == request.auth.uid
           && request.resource.data.temperatureLogVerified == true
           && request.resource.data.issuedUnitIds is list
@@ -313,7 +351,21 @@
             'temperatureLogVerified', 'dispatchedAt', 'deliveredAt', 'notes',
             'createdAt', 'updatedAt'
           ])
-          && request.resource.data.dispatchStatus in ['prepared', 'dispatched', 'in_transit', 'delivered', 'cancelled'];
+          && isValidIssueStateTransition(resource.data.dispatchStatus, request.resource.data.dispatchStatus)
+          && (
+            request.resource.data.dispatchStatus != 'delivered' || (
+              resource.data.dispatchStatus in ['prepared', 'dispatched', 'in_transit'] &&
+              request.resource.data.deliveredAt is string &&
+              getAfter(/databases/$(database)/documents/bloodBank/$(centerId)/requests/$(resource.data.requestId)).data.status in ['partially_fulfilled', 'fulfilled'] &&
+              getAfter(/databases/$(database)/documents/bloodBank/$(centerId)/requests/$(resource.data.requestId)).data.fulfilledUnitIds.hasAll(resource.data.issuedUnitIds)
+            )
+          )
+          && (
+            request.resource.data.dispatchStatus != 'cancelled' || (
+              resource.data.dispatchStatus in ['prepared', 'dispatched', 'in_transit'] &&
+              !getAfter(/databases/$(database)/documents/bloodBank/$(centerId)/requests/$(resource.data.requestId)).data.allocatedUnitIds.hasAny(resource.data.issuedUnitIds)
+            )
+          );
 
         allow delete: if false;
       }

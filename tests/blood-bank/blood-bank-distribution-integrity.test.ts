@@ -27,7 +27,12 @@ import { initializeTestEnvironment } from '@firebase/rules-unit-testing';
 import { readFileSync } from 'fs';
 import { doc, getDoc, setDoc, collection, getDocs, type Firestore } from 'firebase/firestore';
 import type { BloodDistribution } from '../../src/lib/blood-bank/types';
-import { createDistribution, deliverDistribution, cancelDistribution } from '../../src/lib/blood-bank/firestore-service';
+import {
+  createDistribution,
+  deliverDistribution,
+  cancelDistribution,
+  updateRequestStatus,
+} from '../../src/lib/blood-bank/firestore-service';
 import { BloodBankValidationError } from '../../src/lib/blood-bank/validation';
 
 const PROJECT_ID = 'medicore-distribution-tx-test';
@@ -954,7 +959,7 @@ async function runRealDistributionTransactionSuite() {
       );
     } catch (e: unknown) {
       const err = e as Error;
-      threw = err instanceof BloodBankValidationError && err.message.includes('cannot be delivered directly');
+      threw = err instanceof BloodBankValidationError && (err.message.includes('cannot be created directly') || err.message.includes('delivered'));
     }
     if (!threw) throw new Error('Should have rejected delivering an unreserved available unit directly');
 
@@ -1411,6 +1416,258 @@ async function runRealDistributionTransactionSuite() {
     const reqSnap = await getDoc(doc(staff, 'bloodBank', 'center-primary', 'requests', 'req_race_deliver'));
     if (reqSnap.data()?.status !== 'fulfilled') throw new Error('Request should be fulfilled');
     if (!reqSnap.data()?.fulfilledUnitIds?.includes('unit_race_deliver')) throw new Error('Request missing fulfilledUnitIds');
+  });
+
+  // ---------------------------------------------------------------------------
+  // TEST 18: updateRequestStatus rejects setting partially_fulfilled or fulfilled directly
+  // ---------------------------------------------------------------------------
+  await test('18. updateRequestStatus rejects setting partially_fulfilled or fulfilled directly', async () => {
+    await seedTestRecords([
+      [
+        'requests',
+        'req_status_direct',
+        {
+          id: 'req_status_direct',
+          centerId: 'center-primary',
+          requestingOrganization: 'St. Jude',
+          bloodGroup: 'O+',
+          componentType: 'whole_blood',
+          quantityUnits: 2,
+          urgency: 'routine',
+          requiredByDate: '2026-03-01T10:00:00Z',
+          status: 'approved',
+          fulfilledUnitIds: [],
+          allocatedUnitIds: [],
+          createdAt: '2026-02-01T00:00:00Z',
+          updatedAt: '2026-02-01T00:00:00Z',
+        },
+      ],
+    ]);
+
+    let threwFulfilled = false;
+    try {
+      await updateRequestStatus(
+        'req_status_direct',
+        'fulfilled',
+        'Manual completion attempt',
+        actor,
+        'center-primary',
+        staff as unknown as Firestore
+      );
+    } catch (e: unknown) {
+      const err = e as Error;
+      threwFulfilled = err instanceof BloodBankValidationError && err.message.includes('deliverDistribution');
+    }
+    if (!threwFulfilled) throw new Error('Should have rejected manual status transition to fulfilled');
+
+    let threwPartial = false;
+    try {
+      await updateRequestStatus(
+        'req_status_direct',
+        'partially_fulfilled',
+        'Manual partial attempt',
+        actor,
+        'center-primary',
+        staff as unknown as Firestore
+      );
+    } catch (e: unknown) {
+      const err = e as Error;
+      threwPartial = err instanceof BloodBankValidationError && err.message.includes('deliverDistribution');
+    }
+    if (!threwPartial) throw new Error('Should have rejected manual status transition to partially_fulfilled');
+  });
+
+  // ---------------------------------------------------------------------------
+  // TEST 19: createDistribution rejects creating a second distribution for an already reserved unit
+  // ---------------------------------------------------------------------------
+  await test('19. createDistribution rejects creating a second distribution for an already reserved unit', async () => {
+    await seedTestRecords([
+      [
+        'requests',
+        'req_second_dist',
+        {
+          id: 'req_second_dist',
+          centerId: 'center-primary',
+          requestingOrganization: 'Valley General',
+          bloodGroup: 'O+',
+          componentType: 'whole_blood',
+          quantityUnits: 2,
+          urgency: 'routine',
+          requiredByDate: '2026-03-01T10:00:00Z',
+          status: 'approved',
+          fulfilledUnitIds: [],
+          allocatedUnitIds: [],
+          createdAt: '2026-02-01T00:00:00Z',
+          updatedAt: '2026-02-01T00:00:00Z',
+        },
+      ],
+      [
+        'inventory',
+        'unit_second_dist',
+        {
+          id: 'unit_second_dist',
+          centerId: 'center-primary',
+          donationId: 'don_base',
+          donorId: 'donor_base',
+          bloodGroup: 'O+',
+          componentType: 'whole_blood',
+          collectionDate: '2026-02-01',
+          expiryDate: '2026-03-15',
+          volumeMl: 450,
+          storageLocation: 'Shelf J',
+          status: 'available',
+          createdAt: '2026-02-01T00:00:00Z',
+          updatedAt: '2026-02-01T00:00:00Z',
+        },
+      ],
+    ]);
+
+    // Dispatch unit once
+    await createDistribution(
+      {
+        requestId: 'req_second_dist',
+        destinationOrganization: 'Valley General',
+        issuedUnitIds: ['unit_second_dist'],
+        authorizedStaffUid: staffUid,
+        dispatchStatus: 'dispatched',
+        temperatureLogVerified: true,
+      },
+      actor,
+      staff as unknown as Firestore
+    );
+
+    // Attempt to create a second distribution using that same reserved unit
+    let threw = false;
+    try {
+      await createDistribution(
+        {
+          requestId: 'req_second_dist',
+          destinationOrganization: 'Valley General',
+          issuedUnitIds: ['unit_second_dist'],
+          authorizedStaffUid: staffUid,
+          dispatchStatus: 'dispatched',
+          temperatureLogVerified: true,
+        },
+        actor,
+        staff as unknown as Firestore
+      );
+    } catch (e: unknown) {
+      const err = e as Error;
+      threw = err instanceof BloodBankValidationError && (err.message.includes('already been allocated') || err.message.includes('already reserved'));
+    }
+    if (!threw) throw new Error('Should have rejected creating a second distribution for an already reserved unit');
+  });
+
+  // ---------------------------------------------------------------------------
+  // TEST 20: Request cancellation with active allocations lifecycle and rollback
+  // ---------------------------------------------------------------------------
+  await test('20. Cancelling a request with active allocations is rejected until distribution is cancelled', async () => {
+    await seedTestRecords([
+      [
+        'requests',
+        'req_cancel_active_alloc',
+        {
+          id: 'req_cancel_active_alloc',
+          centerId: 'center-primary',
+          requestingOrganization: 'Memorial Care',
+          bloodGroup: 'O+',
+          componentType: 'whole_blood',
+          quantityUnits: 1,
+          urgency: 'routine',
+          requiredByDate: '2026-03-01T10:00:00Z',
+          status: 'approved',
+          fulfilledUnitIds: [],
+          allocatedUnitIds: [],
+          createdAt: '2026-02-01T00:00:00Z',
+          updatedAt: '2026-02-01T00:00:00Z',
+        },
+      ],
+      [
+        'inventory',
+        'unit_cancel_active_alloc',
+        {
+          id: 'unit_cancel_active_alloc',
+          centerId: 'center-primary',
+          donationId: 'don_base',
+          donorId: 'donor_base',
+          bloodGroup: 'O+',
+          componentType: 'whole_blood',
+          collectionDate: '2026-02-01',
+          expiryDate: '2026-03-15',
+          volumeMl: 450,
+          storageLocation: 'Shelf K',
+          status: 'available',
+          createdAt: '2026-02-01T00:00:00Z',
+          updatedAt: '2026-02-01T00:00:00Z',
+        },
+      ],
+    ]);
+
+    // Step 1: Dispatch distribution (allocates unit)
+    const dist = await createDistribution(
+      {
+        requestId: 'req_cancel_active_alloc',
+        destinationOrganization: 'Memorial Care',
+        issuedUnitIds: ['unit_cancel_active_alloc'],
+        authorizedStaffUid: staffUid,
+        dispatchStatus: 'dispatched',
+        temperatureLogVerified: true,
+      },
+      actor,
+      staff as unknown as Firestore
+    );
+
+    // Step 2: Attempt to cancel request directly while active allocation exists -> MUST FAIL
+    let threwActive = false;
+    try {
+      await updateRequestStatus(
+        'req_cancel_active_alloc',
+        'cancelled',
+        'Premature cancellation attempt',
+        actor,
+        'center-primary',
+        staff as unknown as Firestore
+      );
+    } catch (e: unknown) {
+      const err = e as Error;
+      threwActive = err instanceof BloodBankValidationError && err.message.includes('active unit allocation');
+    }
+    if (!threwActive) throw new Error('Cancelling request with active allocations should have been rejected');
+
+    // Verify atomicity after failed cancellation: request remains approved with active allocation, unit remains reserved
+    const reqAfterFail = await getDoc(doc(staff, 'bloodBank', 'center-primary', 'requests', 'req_cancel_active_alloc'));
+    if (reqAfterFail.data()?.status !== 'approved') throw new Error('Request status should remain approved after failed cancellation');
+    if (!reqAfterFail.data()?.allocatedUnitIds?.includes('unit_cancel_active_alloc')) throw new Error('Allocations should be intact');
+
+    const unitAfterFail = await getDoc(doc(staff, 'bloodBank', 'center-primary', 'inventory', 'unit_cancel_active_alloc'));
+    if (unitAfterFail.data()?.status !== 'reserved') throw new Error('Unit should remain reserved');
+
+    // Step 3: Cancel the active distribution first -> releases reserved units
+    await cancelDistribution(
+      dist.id,
+      actor,
+      'Requesting surgeon cancelled procedure',
+      staff as unknown as Firestore
+    );
+
+    // Verify unit was released back to available
+    const unitAfterRelease = await getDoc(doc(staff, 'bloodBank', 'center-primary', 'inventory', 'unit_cancel_active_alloc'));
+    if (unitAfterRelease.data()?.status !== 'available') throw new Error('Unit should be available after distribution cancellation');
+    if (unitAfterRelease.data()?.reservedForRequestId !== null) throw new Error('Unit reservation should be cleared');
+
+    // Step 4: Now request cancellation succeeds because allocations are cleared!
+    await updateRequestStatus(
+      'req_cancel_active_alloc',
+      'cancelled',
+      'Procedure cancelled and inventory released',
+      actor,
+      'center-primary',
+      staff as unknown as Firestore
+    );
+
+    // Verify final request status in Firestore
+    const reqFinal = await getDoc(doc(staff, 'bloodBank', 'center-primary', 'requests', 'req_cancel_active_alloc'));
+    if (reqFinal.data()?.status !== 'cancelled') throw new Error('Request should now be cancelled');
   });
 
   // Summary

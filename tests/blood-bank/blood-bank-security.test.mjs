@@ -656,6 +656,181 @@ async function runBloodBankSecuritySuite() {
     await assertFails(deleteDoc(doc(admin, 'bloodBank', 'center-primary', 'inventory', 'unit_existing')));
   });
 
+  // =========================================================================
+  // Category H: Direct Security Rules Bypass Prevention (Phase 4A.4)
+  // Direct client writes attempting to bypass service-level lifecycle validation
+  // =========================================================================
+  console.log('\n--- Category H: Direct Security Rules Bypass Prevention ---');
+
+  // Bypass H1: Deny direct request update to fulfilled while inventory remains reserved
+  await test('H1: Deny direct request update to fulfilled while inventory remains reserved', async () => {
+    // Seed approved request and reserved unit
+    await testEnv.withSecurityRulesDisabled(async (context) => {
+      const adminDb = context.firestore();
+      await setDoc(doc(adminDb, 'bloodBank', 'center-primary', 'requests', 'req_bypass_h1'), {
+        id: 'req_bypass_h1',
+        centerId: 'center-primary',
+        requestingOrganization: 'County General',
+        bloodGroup: 'O+',
+        componentType: 'whole_blood',
+        quantityUnits: 1,
+        urgency: 'urgent',
+        requiredByDate: '2026-03-01T10:00:00Z',
+        status: 'approved',
+        allocatedUnitIds: ['unit_bypass_h1'],
+        fulfilledUnitIds: [],
+        createdAt: '2026-03-01T10:00:00Z',
+        updatedAt: '2026-03-01T10:00:00Z',
+      });
+      await setDoc(doc(adminDb, 'bloodBank', 'center-primary', 'inventory', 'unit_bypass_h1'), {
+        id: 'unit_bypass_h1',
+        centerId: 'center-primary',
+        donationId: 'don_base',
+        donorId: 'donor_base',
+        bloodGroup: 'O+',
+        componentType: 'whole_blood',
+        collectionDate: '2026-02-01',
+        expiryDate: '2026-03-15',
+        volumeMl: 450,
+        storageLocation: 'Shelf A',
+        status: 'reserved',
+        reservedForRequestId: 'req_bypass_h1',
+        createdAt: '2026-03-01T10:00:00Z',
+        updatedAt: '2026-03-01T10:00:00Z',
+      });
+    });
+
+    // Direct write attempting to mark request fulfilled while unit remains reserved in inventory
+    await assertFails(updateDoc(doc(staff, 'bloodBank', 'center-primary', 'requests', 'req_bypass_h1'), {
+      status: 'fulfilled',
+      fulfilledUnitIds: ['unit_bypass_h1'],
+      allocatedUnitIds: [],
+      updatedAt: '2026-03-01T11:00:00Z',
+    }));
+  });
+
+  // Bypass H2: Deny injecting arbitrary fake IDs into fulfilledUnitIds
+  await test('H2: Deny injecting arbitrary fake IDs into fulfilledUnitIds without delivery', async () => {
+    await assertFails(updateDoc(doc(staff, 'bloodBank', 'center-primary', 'requests', 'req_bypass_h1'), {
+      status: 'fulfilled',
+      fulfilledUnitIds: ['unit_FAKE_NONEXISTENT'],
+      updatedAt: '2026-03-01T11:00:00Z',
+    }));
+  });
+
+  // Bypass H3: Deny removing/clearing allocatedUnitIds on a request without releasing inventory
+  await test('H3: Deny removing or replacing allocated IDs without releasing inventory', async () => {
+    await assertFails(updateDoc(doc(staff, 'bloodBank', 'center-primary', 'requests', 'req_bypass_h1'), {
+      allocatedUnitIds: [], // Unit still reserved in inventory!
+      updatedAt: '2026-03-01T11:00:00Z',
+    }));
+  });
+
+  // Bypass H4: Deny direct creation of an issue document with dispatchStatus: 'delivered'
+  await test('H4: Deny direct creation of an issue document with dispatchStatus: delivered', async () => {
+    await assertFails(setDoc(doc(staff, 'bloodBank', 'center-primary', 'issues', 'issue_bypass_h4'), {
+      id: 'issue_bypass_h4',
+      centerId: 'center-primary',
+      requestId: 'req_bypass_h1',
+      destinationOrganization: 'County General',
+      issuedUnitIds: ['unit_bypass_h1'],
+      authorizedStaffUid: 'staff_bloodbank_1',
+      dispatchStatus: 'delivered', // Prohibited on creation
+      temperatureLogVerified: true,
+      deliveredAt: '2026-03-01T11:00:00Z',
+      createdAt: '2026-03-01T11:00:00Z',
+      updatedAt: '2026-03-01T11:00:00Z',
+    }));
+  });
+
+  // Bypass H5: Deny updating a dispatched issue to delivered in isolation without changing request & inventory
+  await test('H5: Deny updating a dispatched issue to delivered in isolation without atomic request and inventory updates', async () => {
+    // Seed an issue in dispatched status
+    await testEnv.withSecurityRulesDisabled(async (context) => {
+      const adminDb = context.firestore();
+      await setDoc(doc(adminDb, 'bloodBank', 'center-primary', 'issues', 'issue_bypass_h5'), {
+        id: 'issue_bypass_h5',
+        centerId: 'center-primary',
+        requestId: 'req_bypass_h1',
+        destinationOrganization: 'County General',
+        issuedUnitIds: ['unit_bypass_h1'],
+        authorizedStaffUid: 'staff_bloodbank_1',
+        dispatchStatus: 'dispatched',
+        temperatureLogVerified: true,
+        createdAt: '2026-03-01T10:00:00Z',
+        updatedAt: '2026-03-01T10:00:00Z',
+      });
+    });
+
+    // Attempt direct isolated update of issue to delivered
+    await assertFails(updateDoc(doc(staff, 'bloodBank', 'center-primary', 'issues', 'issue_bypass_h5'), {
+      dispatchStatus: 'delivered',
+      deliveredAt: '2026-03-01T11:00:00Z',
+      updatedAt: '2026-03-01T11:00:00Z',
+    }));
+  });
+
+  // Bypass H6: Deny updating an inventory unit from reserved to transfused in isolation
+  await test('H6: Deny marking a reserved inventory unit transfused without a valid delivery transaction', async () => {
+    await assertFails(updateDoc(doc(staff, 'bloodBank', 'center-primary', 'inventory', 'unit_bypass_h1'), {
+      status: 'transfused',
+      updatedAt: '2026-03-01T11:00:00Z',
+    }));
+  });
+
+  // Bypass H7: Deny reversing terminal dispatchStatus (from delivered or cancelled back to active)
+  await test('H7: Deny changing a cancelled or delivered issue back to an active status', async () => {
+    // Seed a delivered issue and a cancelled issue
+    await testEnv.withSecurityRulesDisabled(async (context) => {
+      const adminDb = context.firestore();
+      await setDoc(doc(adminDb, 'bloodBank', 'center-primary', 'issues', 'issue_term_delivered'), {
+        id: 'issue_term_delivered',
+        centerId: 'center-primary',
+        requestId: 'req_bypass_h1',
+        destinationOrganization: 'County General',
+        issuedUnitIds: ['unit_bypass_h1'],
+        authorizedStaffUid: 'staff_bloodbank_1',
+        dispatchStatus: 'delivered',
+        temperatureLogVerified: true,
+        deliveredAt: '2026-03-01T11:00:00Z',
+        createdAt: '2026-03-01T10:00:00Z',
+        updatedAt: '2026-03-01T11:00:00Z',
+      });
+      await setDoc(doc(adminDb, 'bloodBank', 'center-primary', 'issues', 'issue_term_cancelled'), {
+        id: 'issue_term_cancelled',
+        centerId: 'center-primary',
+        requestId: 'req_bypass_h1',
+        destinationOrganization: 'County General',
+        issuedUnitIds: ['unit_bypass_h1'],
+        authorizedStaffUid: 'staff_bloodbank_1',
+        dispatchStatus: 'cancelled',
+        temperatureLogVerified: true,
+        createdAt: '2026-03-01T10:00:00Z',
+        updatedAt: '2026-03-01T11:00:00Z',
+      });
+    });
+
+    // Reopen delivered issue to dispatched -> must fail
+    await assertFails(updateDoc(doc(staff, 'bloodBank', 'center-primary', 'issues', 'issue_term_delivered'), {
+      dispatchStatus: 'dispatched',
+      updatedAt: '2026-03-01T12:00:00Z',
+    }));
+
+    // Reopen cancelled issue to dispatched -> must fail
+    await assertFails(updateDoc(doc(staff, 'bloodBank', 'center-primary', 'issues', 'issue_term_cancelled'), {
+      dispatchStatus: 'dispatched',
+      updatedAt: '2026-03-01T12:00:00Z',
+    }));
+  });
+
+  // Bypass H8: Deny updating a request to cancelled when active allocations exist
+  await test('H8: Deny updating a request to cancelled when active allocations exist', async () => {
+    await assertFails(updateDoc(doc(staff, 'bloodBank', 'center-primary', 'requests', 'req_bypass_h1'), {
+      status: 'cancelled',
+      updatedAt: '2026-03-01T11:00:00Z',
+    }));
+  });
+
   // Summary
   console.log('\n================================================================');
   const passCount = results.filter((r) => r.status === 'PASS').length;

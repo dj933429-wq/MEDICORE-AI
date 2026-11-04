@@ -384,13 +384,21 @@ export async function updateRequestStatus(
   newStatus: RequestStatus,
   decisionNotes: string | undefined,
   actor: { uid: string; email?: string },
-  centerId = DEFAULT_BLOOD_BANK_CENTER_ID
+  centerId = DEFAULT_BLOOD_BANK_CENTER_ID,
+  firestoreInstance = db
 ): Promise<void> {
   const cId = getCenterId(centerId);
-  const reqRef = doc(db, 'bloodBank', cId, 'requests', requestId);
+  const reqRef = doc(firestoreInstance, 'bloodBank', cId, 'requests', requestId);
   const now = new Date().toISOString();
 
-  await runTransaction(db, async (tx) => {
+  // Enforce single delivery path: fulfillment cannot be set manually via generic status updates
+  if (newStatus === 'partially_fulfilled' || newStatus === 'fulfilled') {
+    throw new BloodBankValidationError(
+      `Cannot manually transition request to '${newStatus}'. Fulfillment status must be derived from confirmed clinical deliveries via deliverDistribution().`
+    );
+  }
+
+  await runTransaction(firestoreInstance, async (tx) => {
     const snap = await tx.get(reqRef);
     if (!snap.exists()) {
       throw new BloodBankValidationError(`Blood request with ID ${requestId} does not exist.`);
@@ -403,19 +411,34 @@ export async function updateRequestStatus(
       );
     }
 
-    const { auditRef, fullEvent } = createAuditRefAndEvent(cId, {
-      actorUid: actor.uid,
-      actorEmail: actor.email,
-      actorRole: 'blood_bank',
-      action: 'REQUEST_STATUS_UPDATED',
-      entity: 'request',
-      entityId: requestId,
-      statusTransition: {
-        from: currentReq.status,
-        to: newStatus,
+    // Fix request cancellation with active allocations:
+    // A request with non-empty allocatedUnitIds must not be cancelled while its distributions still reserve inventory.
+    if (newStatus === 'cancelled') {
+      const activeAllocations = currentReq.allocatedUnitIds || [];
+      if (activeAllocations.length > 0) {
+        throw new BloodBankValidationError(
+          `Cannot cancel request ${requestId} with ${activeAllocations.length} active unit allocation(s) (${activeAllocations.join(', ')}). Active distributions must first be cancelled and inventory released before the request can be cancelled.`
+        );
+      }
+    }
+
+    const { auditRef, fullEvent } = createAuditRefAndEvent(
+      cId,
+      {
+        actorUid: actor.uid,
+        actorEmail: actor.email,
+        actorRole: 'blood_bank',
+        action: 'REQUEST_STATUS_UPDATED',
+        entity: 'request',
+        entityId: requestId,
+        statusTransition: {
+          from: currentReq.status,
+          to: newStatus,
+        },
+        details: { decisionNotes },
       },
-      details: { decisionNotes },
-    });
+      firestoreInstance
+    );
 
     tx.update(reqRef, {
       status: newStatus,
@@ -449,6 +472,13 @@ export async function createDistribution(
   firestoreInstance = db
 ): Promise<BloodDistribution> {
   validateDistributionPayload(payload);
+
+  // Enforce single delivery path: cannot create a distribution directly as delivered
+  if (payload.dispatchStatus === 'delivered') {
+    throw new BloodBankValidationError(
+      'Distributions cannot be created directly with dispatchStatus "delivered". Create a distribution in dispatched/prepared status first, and confirm delivery exclusively via deliverDistribution().'
+    );
+  }
 
   const centerId = DEFAULT_BLOOD_BANK_CENTER_ID;
   const issueId = `dist_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
@@ -537,30 +567,22 @@ export async function createDistribution(
       }
       const unitData = uSnap.data() as BloodInventoryUnit;
 
-      // Status check: must be 'available' or 'reserved'
-      if (unitData.status !== 'available' && unitData.status !== 'reserved') {
-        throw new BloodBankValidationError(
-          `Unit ${uSnap.id} is currently in '${unitData.status}' status and cannot be issued.`
-        );
-      }
-
-      // Unit reserved for another request must be rejected
+      // Status check: must be available. Do not create a second distribution for an already-reserved unit.
       if (unitData.status === 'reserved') {
         if (!unitData.reservedForRequestId || unitData.reservedForRequestId !== payload.requestId) {
           throw new BloodBankValidationError(
             `Unit ${uSnap.id} is reserved for another request (${unitData.reservedForRequestId || 'unknown'}) and cannot be issued to request ${payload.requestId}.`
           );
         }
+        throw new BloodBankValidationError(
+          `Unit ${uSnap.id} is already reserved for request ${payload.requestId}. Cannot create a second distribution for an already reserved unit; confirm delivery via deliverDistribution().`
+        );
       }
 
-      // Delivered status validation: available units cannot transition directly to transfused.
-      // Units must already be reserved for this request before delivery can be confirmed.
-      if (payload.dispatchStatus === 'delivered') {
-        if (unitData.status !== 'reserved' || unitData.reservedForRequestId !== payload.requestId) {
-          throw new BloodBankValidationError(
-            `Unit ${uSnap.id} cannot be delivered directly from '${unitData.status}' status. Units must first be reserved for request ${payload.requestId} before transitioning to delivered/transfused.`
-          );
-        }
+      if (unitData.status !== 'available') {
+        throw new BloodBankValidationError(
+          `Unit ${uSnap.id} is currently in '${unitData.status}' status and cannot be issued. New distributions can only be created from available inventory units.`
+        );
       }
     }
 
@@ -574,40 +596,20 @@ export async function createDistribution(
       return;
     }
 
-    if (payload.dispatchStatus === 'delivered') {
-      // Direct delivery of already reserved units (rare edge-case):
-      for (const u of unitRefs) {
-        tx.update(u.ref, {
-          status: 'transfused',
-          reservedForRequestId: payload.requestId,
-          updatedAt: now,
-        });
-      }
-      const updatedFulfilled = Array.from(new Set([...previouslyFulfilled, ...payload.issuedUnitIds]));
-      const updatedAllocated = previouslyAllocated.filter((id) => !payload.issuedUnitIds.includes(id));
-      const isFullyFulfilled = updatedFulfilled.length >= reqData.quantityUnits;
-      tx.update(reqRef, {
-        status: isFullyFulfilled ? 'fulfilled' : 'partially_fulfilled',
-        fulfilledUnitIds: updatedFulfilled,
-        allocatedUnitIds: updatedAllocated,
-        updatedAt: now,
-      });
-    } else {
-      // Normal dispatch / in_transit / prepared:
-      // Units become reserved; request remains approved / partially_fulfilled without adding to fulfilledUnitIds!
-      for (const u of unitRefs) {
-        tx.update(u.ref, {
-          status: 'reserved',
-          reservedForRequestId: payload.requestId,
-          updatedAt: now,
-        });
-      }
-      const updatedAllocated = Array.from(new Set([...previouslyAllocated, ...payload.issuedUnitIds]));
-      tx.update(reqRef, {
-        allocatedUnitIds: updatedAllocated,
+    // Normal dispatch / in_transit / prepared:
+    // Units become reserved; request remains approved / partially_fulfilled without adding to fulfilledUnitIds!
+    for (const u of unitRefs) {
+      tx.update(u.ref, {
+        status: 'reserved',
+        reservedForRequestId: payload.requestId,
         updatedAt: now,
       });
     }
+    const updatedAllocated = Array.from(new Set([...previouslyAllocated, ...payload.issuedUnitIds]));
+    tx.update(reqRef, {
+      allocatedUnitIds: updatedAllocated,
+      updatedAt: now,
+    });
 
     tx.set(auditRef, fullEvent);
   });
