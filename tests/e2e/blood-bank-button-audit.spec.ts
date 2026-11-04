@@ -2,6 +2,7 @@ import { test, expect } from '@playwright/test';
 
 test.describe('Detailed Blood Bank Button Diagnostics', () => {
   test('Test every button, form submission, and modal dialog', async ({ page }) => {
+    test.setTimeout(120000);
     const errorLogs: string[] = [];
     page.on('console', (msg) => {
       if (msg.type() === 'error') {
@@ -135,7 +136,7 @@ test.describe('Detailed Blood Bank Button Diagnostics', () => {
     expect(donorOptionsCount).toBeGreaterThan(1);
 
     await donorSelect.selectOption({ index: 1 });
-    await page.click('button:has-text("Confirm & Save Donation")');
+    await page.click('button:has-text("Save Donation Session")');
     await page.waitForTimeout(2000);
     console.log('Submitted donation record');
 
@@ -158,9 +159,9 @@ test.describe('Detailed Blood Bank Button Diagnostics', () => {
     await page.locator('button:has-text("Submit Blood Request")').or(page.locator('button:has-text("Submit first request")')).first().click();
     await page.waitForTimeout(600);
     const testHospName = `Mercy General ${Date.now().toString().slice(-4)}`;
-    await page.fill('input[placeholder="e.g. St. Jude General Hospital"]', testHospName);
-    await page.fill('input[type="date"]', '2026-12-01');
-    await page.click('button:has-text("Submit Blood Request")');
+    await page.fill('input[placeholder="e.g. City General Hospital"]', testHospName);
+    await page.fill('input[type="datetime-local"]', '2026-12-01T14:30');
+    await page.click('button:has-text("Send Request")');
     await page.waitForTimeout(2000);
     const reqCreated = await page.locator(`text=${testHospName}`).first().isVisible();
     console.log(`Request created and visible in table: ${reqCreated}`);

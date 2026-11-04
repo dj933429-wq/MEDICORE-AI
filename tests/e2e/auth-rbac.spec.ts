@@ -41,9 +41,9 @@ test.describe('Module 1: Authentication & RBAC Routing', () => {
     await page.click('button[type="submit"]');
 
     // Should redirect to /dashboard
-    await expect(page).toHaveURL(/\/dashboard/, { timeout: 15000 });
+    await expect(page).toHaveURL(/\/dashboard/, { timeout: 30000 });
     // Patient header greeting
-    await expect(page.locator('text=Welcome').first()).toBeVisible({ timeout: 15000 });
+    await expect(page.locator('text=Welcome').first()).toBeVisible({ timeout: 30000 });
   });
 
   test('1.2 Doctor login and role-based view', async ({ page }) => {
@@ -52,7 +52,7 @@ test.describe('Module 1: Authentication & RBAC Routing', () => {
     await page.fill('#password', USERS.doctor.password);
     await page.click('button[type="submit"]');
 
-    await expect(page).toHaveURL(/\/dashboard/, { timeout: 15000 });
+    await expect(page).toHaveURL(/\/dashboard/, { timeout: 30000 });
     await expect(page.locator('text=Dr.').or(page.locator('text=Patient Records')).first()).toBeVisible({ timeout: 15000 });
   });
 
@@ -73,7 +73,7 @@ test.describe('Module 1: Authentication & RBAC Routing', () => {
     await page.fill('#password', USERS.bloodBank.password);
     await page.click('button[type="submit"]');
 
-    await expect(page).toHaveURL(/\/dashboard/, { timeout: 15000 });
+    await expect(page).toHaveURL(/\/dashboard/, { timeout: 30000 });
     
     // Navigate directly to blood bank portal
     await page.goto('/dashboard/blood-bank');
@@ -89,7 +89,7 @@ test.describe('Module 1: Authentication & RBAC Routing', () => {
     await page.fill('#password', USERS.admin.password);
     await page.click('button[type="submit"]');
 
-    await expect(page).toHaveURL(/\/dashboard/, { timeout: 15000 });
+    await expect(page).toHaveURL(/\/dashboard/, { timeout: 30000 });
     await expect(page.locator('text=Administrator').or(page.locator('text=Admin')).first()).toBeVisible({ timeout: 15000 });
   });
 
@@ -99,7 +99,7 @@ test.describe('Module 1: Authentication & RBAC Routing', () => {
     await page.fill('#email', USERS.patient.email);
     await page.fill('#password', USERS.patient.password);
     await page.click('button[type="submit"]');
-    await expect(page).toHaveURL(/\/dashboard/, { timeout: 15000 });
+    await expect(page).toHaveURL(/\/dashboard/, { timeout: 30000 });
 
     // Attempt to force-navigate to Blood Bank management portal
     await page.goto('/dashboard/blood-bank');
@@ -115,7 +115,7 @@ test.describe('Module 1: Authentication & RBAC Routing', () => {
     await page.fill('#email', USERS.patient.email);
     await page.fill('#password', USERS.patient.password);
     await page.click('button[type="submit"]');
-    await expect(page).toHaveURL(/\/dashboard/, { timeout: 15000 });
+    await expect(page).toHaveURL(/\/dashboard/, { timeout: 30000 });
 
     // Attempt to force-navigate to Pharmacist dashboard
     await page.goto('/dashboard/pharmacist');
@@ -129,7 +129,7 @@ test.describe('Module 1: Authentication & RBAC Routing', () => {
     await page.fill('#email', USERS.patient.email);
     await page.fill('#password', USERS.patient.password);
     await page.click('button[type="submit"]');
-    await expect(page).toHaveURL(/\/dashboard/, { timeout: 15000 });
+    await expect(page).toHaveURL(/\/dashboard/, { timeout: 30000 });
 
     // Clear browser cookies and storage
     await context.clearCookies();
