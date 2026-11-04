@@ -4,6 +4,8 @@ import Link from 'next/link';
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { login, useAuth } from '../../lib/auth';
+import { db } from '../../lib/firebase';
+import { doc, getDoc } from 'firebase/firestore';
 
 export default function LoginPage() {
   const [email, setEmail] = useState('');
@@ -39,10 +41,24 @@ export default function LoginPage() {
     setError('');
     
     try {
-      await login(email, password);
-      setTimeout(() => {
-        router.push('/dashboard');
-      }, 1000);
+      const firebaseUser = await login(email, password);
+      try {
+        const userSnap = await getDoc(doc(db, 'users', firebaseUser.uid));
+        const role = userSnap.exists() ? userSnap.data()?.role : 'patient';
+        if (role === 'doctor') {
+          router.replace('/dashboard/doctor');
+        } else if (role === 'pharmacist') {
+          router.replace('/dashboard/pharmacist');
+        } else if (role === 'blood_bank') {
+          router.replace('/dashboard/blood-bank');
+        } else if (role === 'patient') {
+          router.replace('/dashboard/patient');
+        } else {
+          router.replace('/dashboard');
+        }
+      } catch {
+        router.replace('/dashboard');
+      }
     } catch (err: unknown) {
       setError((err as Error).message || 'Failed to authenticate.');
       setIsLoading(false);

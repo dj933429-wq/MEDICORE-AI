@@ -1,6 +1,11 @@
 import { test, expect } from '@playwright/test';
 
 test.describe('Detailed Blood Bank Button Diagnostics', () => {
+  test.beforeEach(async ({ context }) => {
+    await context.clearCookies();
+    await context.clearPermissions();
+  });
+
   test('Test every button, form submission, and modal dialog', async ({ page }) => {
     const errorLogs: string[] = [];
     page.on('console', (msg) => {
