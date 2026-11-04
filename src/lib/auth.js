@@ -146,7 +146,7 @@ export const AuthProvider = ({ children }) => {
 
 export const useAuth = () => useContext(AuthContext);
 
-export const signup = async (email, password, name, role) => {
+export const signup = async (email, password, name, role, gender) => {
   const userCredential = await createUserWithEmailAndPassword(auth, email, password);
   const user = userCredential.user;
 
@@ -162,6 +162,10 @@ export const signup = async (email, password, name, role) => {
     createdAt: new Date().toISOString()
   };
 
+  if (gender && ['female', 'male', 'other'].includes(gender)) {
+    userDocPayload.gender = gender;
+  }
+
   // If a privileged role was requested on public signup, record it for administrative approval
   if (isPrivileged) {
     userDocPayload.requestedRole = role;
@@ -172,13 +176,17 @@ export const signup = async (email, password, name, role) => {
 
   // Automatically create a corresponding document in the "patients" collection
   try {
-    await setDoc(doc(db, 'patients', user.uid), {
+    const patientPayload = {
       name,
       email,
       phone: "",
       userId: user.uid,
       createdAt: new Date().toISOString()
-    });
+    };
+    if (gender && ['female', 'male', 'other'].includes(gender)) {
+      patientPayload.gender = gender;
+    }
+    await setDoc(doc(db, 'patients', user.uid), patientPayload);
   } catch (err) {
     console.error("Failed to auto-create patient profile during signup:", err);
   }
@@ -204,4 +212,18 @@ export const login = async (email, password) => {
 
 export const logout = async () => {
   await firebaseSignOut(auth);
+};
+
+export const updateProfileGender = async (userId, gender) => {
+  if (!userId || !['female', 'male', 'other'].includes(gender)) {
+    throw new Error('Invalid gender update payload');
+  }
+  const userRef = doc(db, 'users', userId);
+  await setDoc(userRef, { gender }, { merge: true });
+  try {
+    const patientRef = doc(db, 'patients', userId);
+    await setDoc(patientRef, { gender }, { merge: true });
+  } catch (err) {
+    console.warn('Could not update patient gender in patients collection:', err);
+  }
 };

@@ -10,6 +10,7 @@ export default function SignupPage() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [role, setRole] = useState('patient');
+  const [gender, setGender] = useState<'female' | 'male' | 'other'>('female');
   const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const router = useRouter();
@@ -24,7 +25,7 @@ export default function SignupPage() {
     setError('');
     
     try {
-      await signup(email, password, name, role);
+      await signup(email, password, name, role, role === 'patient' ? gender : undefined);
       router.push('/dashboard');
     } catch (err: unknown) {
       setError((err as Error).message || 'Failed to register account.');
@@ -77,6 +78,28 @@ export default function SignupPage() {
               <option value="pharmacist">Pharmacist</option>
             </select>
           </div>
+
+          {role === 'patient' && (
+            <div>
+              <label className="block text-gray-700 text-sm font-medium mb-2" htmlFor="gender">
+                Biological Sex / Gender
+              </label>
+              <select
+                id="gender"
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-600 focus:border-transparent outline-none transition-all bg-white"
+                value={gender}
+                onChange={(e) => setGender(e.target.value as 'female' | 'male' | 'other')}
+                disabled={isLoading}
+              >
+                <option value="female">Female</option>
+                <option value="male">Male</option>
+                <option value="other">Other / Prefer not to say</option>
+              </select>
+              <p className="text-xs text-gray-500 mt-1">
+                Used to personalize health modules (e.g. specialized cycle and menstrual health services).
+              </p>
+            </div>
+          )}
 
           <div>
             <label className="block text-gray-700 text-sm font-medium mb-2" htmlFor="email">

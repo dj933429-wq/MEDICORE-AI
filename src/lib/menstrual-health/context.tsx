@@ -52,7 +52,7 @@ export function MenstrualHealthProvider({ children }: { children: React.ReactNod
   const user = authContext?.user || null;
   const authLoading = authContext?.loading ?? false;
 
-  const [mode, setModeState] = useState<TrackerMode>('demo');
+  const [mode, setModeState] = useState<TrackerMode>('empty');
   const [selectedDate, setSelectedDate] = useState<string>(() => formatDateISO(new Date()));
   const [feedbackMessage, setFeedbackMessage] = useState<string | null>(null);
   const [isLoadingData, setIsLoadingData] = useState<boolean>(false);
@@ -62,12 +62,9 @@ export function MenstrualHealthProvider({ children }: { children: React.ReactNod
   const [lastLogSnapshot, setLastLogSnapshot] = useState<QueryDocumentSnapshot | undefined>(undefined);
   const [hasMoreLogs, setHasMoreLogs] = useState<boolean>(false);
 
-  // Initial demo data
-  const initialDemo = useMemo(() => generateDemoDataset(), []);
-
-  // In-memory data states
-  const [periods, setPeriods] = useState<PeriodRecord[]>(initialDemo.periods);
-  const [logs, setLogs] = useState<DailyLog[]>(initialDemo.logs);
+  // Clean slate: empty by default for all users
+  const [periods, setPeriods] = useState<PeriodRecord[]>([]);
+  const [logs, setLogs] = useState<DailyLog[]>([]);
 
   const clearFeedback = useCallback(() => {
     setFeedbackMessage(null);
@@ -88,19 +85,16 @@ export function MenstrualHealthProvider({ children }: { children: React.ReactNod
     if (authLoading) return;
 
     if (!user || !user.uid) {
-      // User logged out: if not in demo mode, reset to empty asynchronously
+      // User logged out: reset to empty clean slate
       loadedUidRef.current = null;
-      if (mode === 'empty') {
-        const timer = setTimeout(() => {
-          setPeriods([]);
-          setLogs([]);
-        }, 0);
-        return () => clearTimeout(timer);
-      }
-      return;
+      const timer = setTimeout(() => {
+        setPeriods([]);
+        setLogs([]);
+      }, 0);
+      return () => clearTimeout(timer);
     }
 
-    // Authenticated patient detected
+    // Authenticated patient detected - load cloud records exclusively
     if (mode === 'empty' && loadedUidRef.current !== user.uid) {
       let isSubscribed = true;
 

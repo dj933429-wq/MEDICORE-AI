@@ -12,6 +12,7 @@ interface PatientDoc {
   name?: string;
   email?: string;
   phone?: string;
+  gender?: string;
   userId?: string;
 }
 
@@ -121,7 +122,8 @@ export default function PatientDashboard() {
         let pData = {
           name: user.name || user.email?.split('@')[0] || 'Unknown Patient',
           email: user.email || 'Unlisted',
-          phone: 'Unlisted'
+          phone: 'Unlisted',
+          gender: user.gender || 'female'
         };
 
         if (pSnap.exists()) {
@@ -323,13 +325,15 @@ export default function PatientDashboard() {
               <span>🩸</span>
               <span>{activeTab === 'blood_bank' ? 'Clinical Overview' : 'Blood Bank Network'}</span>
             </button>
-            <Link
-              href="/dashboard/menstrual-health"
-              className="bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 font-semibold py-3 px-5 rounded-lg shadow-xs transition-colors flex items-center gap-2 whitespace-nowrap"
-            >
-              <span>🌸</span>
-              <span>Menstrual Health Tracker</span>
-            </Link>
+            {((patientDoc?.gender || user?.gender || 'female').toLowerCase() === 'female') && (
+              <Link
+                href="/dashboard/menstrual-health"
+                className="bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 font-semibold py-3 px-5 rounded-lg shadow-xs transition-colors flex items-center gap-2 whitespace-nowrap"
+              >
+                <span>🌸</span>
+                <span>Menstrual Health Tracker</span>
+              </Link>
+            )}
             <button
               onClick={() => setShowModal(true)}
               className="bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 px-6 rounded-lg shadow-md transition-colors whitespace-nowrap"
