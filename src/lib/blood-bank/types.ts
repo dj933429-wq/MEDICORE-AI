@@ -177,6 +177,7 @@ export interface BloodRequest {
   reviewerStaffUid?: string;
   decisionNotes?: string;
   fulfilledUnitIds?: string[];
+  allocatedUnitIds?: string[]; // Dispatched or in-transit units not yet confirmed delivered
   createdAt: string;
   updatedAt: string;
 }

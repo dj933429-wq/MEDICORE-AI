@@ -233,7 +233,7 @@
             'id', 'centerId', 'requestingOrganization', 'departmentOrWard', 'patientIdentifier',
             'bloodGroup', 'componentType', 'quantityUnits', 'urgency', 'requiredByDate',
             'status', 'clinicalIndication', 'reviewerStaffUid', 'decisionNotes',
-            'fulfilledUnitIds', 'createdAt', 'updatedAt'
+            'fulfilledUnitIds', 'allocatedUnitIds', 'createdAt', 'updatedAt'
           ])
           && request.resource.data.bloodGroup in ['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-']
           && request.resource.data.componentType in ['whole_blood', 'red_blood_cells', 'platelets', 'fresh_frozen_plasma', 'cryoprecipitate']
@@ -246,7 +246,7 @@
           && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
             'departmentOrWard', 'urgency', 'requiredByDate', 'status',
             'clinicalIndication', 'reviewerStaffUid', 'decisionNotes',
-            'fulfilledUnitIds', 'updatedAt'
+            'fulfilledUnitIds', 'allocatedUnitIds', 'updatedAt'
           ])
           && request.resource.data.id == resource.data.id
           && request.resource.data.centerId == resource.data.centerId
@@ -259,7 +259,7 @@
             'id', 'centerId', 'requestingOrganization', 'departmentOrWard', 'patientIdentifier',
             'bloodGroup', 'componentType', 'quantityUnits', 'urgency', 'requiredByDate',
             'status', 'clinicalIndication', 'reviewerStaffUid', 'decisionNotes',
-            'fulfilledUnitIds', 'createdAt', 'updatedAt'
+            'fulfilledUnitIds', 'allocatedUnitIds', 'createdAt', 'updatedAt'
           ])
           && isValidRequestStateTransition(resource.data.status, request.resource.data.status);
 

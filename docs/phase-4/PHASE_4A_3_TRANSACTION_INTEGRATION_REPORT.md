@@ -12,9 +12,9 @@
 
 ## 1. Executive Summary
 
-Phase 4A.3 addresses the core transaction, inventory consistency, and fulfillment semantics identified during the Phase 4A.2 code review. Crucially, this review distinguishes between **pure in-memory domain validation tests** and **actual Firestore Emulator transaction integration tests**, subjecting the production `createDistribution()` function from `src/lib/blood-bank/firestore-service.ts` directly to multi-document atomic mutations, rollback conditions, and race condition tests under realistic security rules.
+Phase 4A.3 addresses the core transaction, inventory consistency, and fulfillment semantics identified during the Phase 4A.2 code review. Crucially, this review distinguishes between **pure in-memory domain validation tests** and **actual Firestore Emulator transaction integration tests**, subjecting the production `createDistribution()`, `deliverDistribution()`, and `cancelDistribution()` functions from `src/lib/blood-bank/firestore-service.ts` directly to multi-document atomic mutations, rollback conditions, lifecycle transitions, and race condition tests under realistic security rules.
 
-All 13 transaction integration tests, 52 isolated Firestore security rules assertions, 79 domain unit tests, 45 baseline platform security regression tests, and 61 Menstrual Health Tracker regression tests passed with **0 failures**. The Next.js production build succeeded with **0 TypeScript and 0 ESLint errors**.
+All 17 transaction integration tests, 52 isolated Firestore security rules assertions, 79 domain unit tests, 45 baseline platform security regression tests, and 61 Menstrual Health Tracker regression tests passed with **0 failures**. The Next.js production build succeeded with **0 TypeScript and 0 ESLint errors**.
 
 ---
 
@@ -110,11 +110,12 @@ To avoid the false confidence of mock-only test suites, Phase 4A.3 explicitly es
 - **Portable Resolution:** Replaced any hardcoded host paths with `spawnSync('npx', ['tsx', '--env-file=.env.local', tsTestPath], { stdio: 'inherit', shell: true })`, ensuring seamless execution from the project root on any environment.
 - **Error Propagation:** Handles process spawn errors (`result.error`) and non-zero or null exit statuses (`result.status === null`), guaranteeing that abnormal terminations or signals are never misreported as success.
 
-### 3.5. Atomicity & Request Fulfillment Semantics
-- **Fulfillment Distinction:**
-  - `partially_fulfilled`: Total fulfilled unit count < `quantityUnits`.
-  - `fulfilled`: Terminal status reached only when `updatedFulfilled.length >= reqData.quantityUnits`.
-- **Extended Atomicity Assertions:** Verified in Test 10 that failed transactions leave 0 new issue documents and 0 new audit log documents in Firestore, while request and inventory documents remain strictly unaltered.
+### 3.5. Lifecycle Distinction & Request Fulfillment Semantics
+- **Allocated/Reserved vs. Delivered/Fulfilled Distinction:**
+  - **Dispatch Phase (`createDistribution()`):** Units are allocated and reserved (`status: 'reserved'`, `reservedForRequestId = payload.requestId`). Merely dispatched units are tracked under `allocatedUnitIds` and are **not** treated as clinically fulfilled. `fulfilledUnitIds` remains untouched, and request status remains `approved` (or `partially_fulfilled` if previous deliveries occurred).
+  - **Delivery Phase (`deliverDistribution()`):** Clinically confirmed delivery updates the existing issue record (`dispatchStatus: 'delivered'`, `deliveredAt`, `notes`), transitions reserved units to `status: 'transfused'`, moves units from `allocatedUnitIds` to `fulfilledUnitIds`, and marks the request `fulfilled` only if total delivered units reach or exceed `quantityUnits`.
+  - **Cancellation Phase (`cancelDistribution()`):** Cancelling an in-flight distribution releases units back to `status: 'available'`, clears `reservedForRequestId` to null, removes units from `allocatedUnitIds`, and restores fulfillment capacity without phantom mutations.
+- **Extended Atomicity Assertions:** Verified in Test 10 and Test 16 that failed transactions or deliveries leave 0 phantom documents and 0 audit log documents in Firestore, while request and inventory documents remain strictly unaltered.
 - **Atomic Logging (`createAuditRefAndEvent`):**
   - Updated `createAuditRefAndEvent` to accept an optional `firestoreInstance` parameter, enabling atomic enrollment of audit logs within emulator test contexts.
   - Omitted `undefined` properties cleanly to avoid Firestore serialization errors.
@@ -129,10 +130,10 @@ To avoid the false confidence of mock-only test suites, Phase 4A.3 explicitly es
 
 | # | Invariant Test Case | Description & Post-Transaction Assertion | Result |
 | :--- | :--- | :--- | :--- |
-| **1** | Valid Issue Execution | Approved request receives valid available unit. Verified document creation in `issues`, status update to `partially_fulfilled` in `requests`, unit status update to `reserved` with `reservedForRequestId` in `inventory`, and append of `auditLogs`. | **PASS** |
+| **1** | Valid Issue Execution | Approved request receives valid available unit. Verified document creation in `issues`, request status remaining `approved` with unit in `allocatedUnitIds` and empty `fulfilledUnitIds`, unit status update to `reserved` with `reservedForRequestId` in `inventory`, and append of `auditLogs`. | **PASS** |
 | **2** | Unapproved Request Denial | Requests in `submitted` and `under_review` reject distribution attempts with `BloodBankValidationError`. | **PASS** |
 | **3** | Single-Distribution Deduplication | Attempting to issue `[unit1, unit1]` within a single distribution payload is rejected. | **PASS** |
-| **4** | Allocated Unit Non-Reuse | Attempting to issue a unit already present in `fulfilledUnitIds` of the request is rejected with `already been allocated`. | **PASS** |
+| **4** | Allocated Unit Non-Reuse | Attempting to issue a unit already allocated or fulfilled for the request is rejected with `already been allocated`. | **PASS** |
 | **5** | Cross-Reservation Protection | Unit reserved for another request (`req_SOMEONE_ELSE`) cannot be issued to a different request. | **PASS** |
 | **6** | Request Quantity Enforcement | Request requiring 1 additional unit rejects an attempt to issue 2 units (`cannot issue: request only requires 1 more unit`). | **PASS** |
 | **7** | Terminal Request Immutability | Requests in `fulfilled`, `rejected`, and `cancelled` statuses reject new unit issues. | **PASS** |
@@ -141,9 +142,13 @@ To avoid the false confidence of mock-only test suites, Phase 4A.3 explicitly es
 | **10** | Transaction Atomicity & Rollback | Transaction issuing valid unit + nonexistent unit fails completely. Post-transaction document read verifies that the valid unit remained `available` (not reserved), the request remained unfulfilled, exactly 0 issue documents were created, and exactly 0 audit log documents were created. | **PASS** |
 | **11** | Concurrent Race Condition | Two simultaneous transactions attempt to allocate the same unit to different requests (`req_concurrent_A` vs `req_concurrent_B`). Exactly 1 succeeds and 1 is rejected; winning request exclusively owns unit reservation. | **PASS** |
 | **12** | Delivered Dispatch Rejects Available Unit | Attempting to create distribution with `dispatchStatus: 'delivered'` directly on an `available` (unreserved) unit throws `BloodBankValidationError`. Post-transaction read verifies unit remained `available` and unreserved. | **PASS** |
-| **13** | Delivered Dispatch Legitimate Transition | Distribution with `dispatchStatus: 'delivered'` on a correctly reserved unit transitions the unit to `transfused`, updates request to `fulfilled`, and records issue document and audit log. | **PASS** |
+| **13** | End-to-End Dispatch-to-Delivery Lifecycle | Full real lifecycle execution: dispatch creates issue and reserves unit while keeping request unfulfilled; subsequent `deliverDistribution()` on the same issue record marks issue delivered, transfuses unit, and fulfills request. | **PASS** |
+| **14** | Duplicate Delivery Rejection | Re-delivering an already-delivered distribution throws `BloodBankValidationError` with `already been marked as delivered`. | **PASS** |
+| **15** | Cancelled Distribution Inventory Restoration | In-flight distribution cancellation releases units back to `available`, clears `reservedForRequestId`, and clears request `allocatedUnitIds`. | **PASS** |
+| **16** | Failed Delivery Atomicity Rollback | Tampering one unit in a multi-unit delivery causes `deliverDistribution()` to reject; valid units remain reserved, issue remains dispatched, and 0 audit documents are appended. | **PASS** |
+| **17** | Concurrent Delivery Race Condition | Two simultaneous `deliverDistribution()` calls on the same distribution resolve cleanly with exactly 1 winner and 1 rejection without duplicate fulfillment. | **PASS** |
 
-**Total Integration Tests:** 13 | **Passed:** 13 | **Failed:** 0
+**Total Integration Tests:** 17 | **Passed:** 17 | **Failed:** 0
 
 ---
 
@@ -151,7 +156,7 @@ To avoid the false confidence of mock-only test suites, Phase 4A.3 explicitly es
 
 | Test Suite | Scope | Target | Result |
 | :--- | :--- | :--- | :--- |
-| `tests/blood-bank/blood-bank-distribution-integrity.test.ts` | Real Firestore Transactions & Document State | Firestore Emulator | **13 / 13 PASSED** |
+| `tests/blood-bank/blood-bank-distribution-integrity.test.ts` | Real Firestore Transactions & Document State | Firestore Emulator | **17 / 17 PASSED** |
 | `tests/blood-bank/blood-bank-security.test.mjs` | Rules Invariants, Field Whitelisting, Audit Immutability | Firestore Emulator | **52 / 52 PASSED** |
 | `tests/blood-bank/blood-bank-validation.test.mjs` | Domain Validation, State Transitions, Metrics | Pure Node | **79 / 79 PASSED** |
 | `tests/firestore-security.test.mjs` | Phase 2 Platform Security & RBAC Regressions | Firestore Emulator | **45 / 45 PASSED** |
