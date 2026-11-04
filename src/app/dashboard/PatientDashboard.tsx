@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { useAuth } from '../../lib/auth';
 import { db } from '../../lib/firebase';
 import { collection, query, getDocs, orderBy, doc, getDoc, where, addDoc, serverTimestamp } from 'firebase/firestore';
+import PatientBloodPortal from './patient/components/PatientBloodPortal';
 
 interface PatientDoc {
   id: string;
@@ -88,6 +89,7 @@ export default function PatientDashboard() {
   const [appointments, setAppointments] = useState<Appointment[]>([]);
   const [bills, setBills] = useState<Bill[]>([]);
   const [loading, setLoading] = useState(true);
+  const [activeTab, setActiveTab] = useState<'overview' | 'blood_bank'>('overview');
 
   // Modal State
   const [showModal, setShowModal] = useState(false);
@@ -310,6 +312,17 @@ export default function PatientDashboard() {
             <p className="text-gray-600">Here is your clinical dashboard and schedules.</p>
           </div>
           <div className="flex flex-wrap items-center gap-3">
+            <button
+              onClick={() => setActiveTab(activeTab === 'blood_bank' ? 'overview' : 'blood_bank')}
+              className={`font-semibold py-3 px-5 rounded-lg shadow-xs transition-colors flex items-center gap-2 whitespace-nowrap ${
+                activeTab === 'blood_bank'
+                  ? 'bg-rose-600 text-white shadow-md'
+                  : 'bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200'
+              }`}
+            >
+              <span>🩸</span>
+              <span>{activeTab === 'blood_bank' ? 'Clinical Overview' : 'Blood Bank Network'}</span>
+            </button>
             <Link
               href="/dashboard/menstrual-health"
               className="bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 font-semibold py-3 px-5 rounded-lg shadow-xs transition-colors flex items-center gap-2 whitespace-nowrap"
@@ -395,7 +408,18 @@ export default function PatientDashboard() {
           </div>
         )}
 
-        <div className="space-y-8">
+        {activeTab === 'blood_bank' ? (
+          <div className="mt-4">
+            <PatientBloodPortal
+              currentUser={{
+                uid: user.uid,
+                email: user.email || '',
+                name: patientDoc?.name || user.name || 'Patient'
+              }}
+            />
+          </div>
+        ) : (
+          <div className="space-y-8">
           
           {/* Active Appointments Layer */}
           <section>
@@ -543,6 +567,7 @@ export default function PatientDashboard() {
             </div>
           </section>
         </div>
+        )}
       </div>
     </div>
   );

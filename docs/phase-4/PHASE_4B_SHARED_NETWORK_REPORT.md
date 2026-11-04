@@ -115,3 +115,4 @@ All tests were executed directly against the local Firestore Emulator and TypeSc
 > 1. Authorized laboratory personnel must perform physical ABO/Rh typing and crossmatching.
 > 2. Infectious disease screening clearance (`tested_passed`) must be verified.
 > 3. Cold chain compliance (blood storage between +2°C and +6°C for whole blood / red cells, continuous agitation at +20°C to +24°C for platelets) must be certified by staff sign-off.
+
