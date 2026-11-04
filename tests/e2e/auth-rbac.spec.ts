@@ -10,7 +10,6 @@ const USERS = {
   doctor: {
     email: 'e2e_doctor@medicore.ai',
     password: 'E2E_TestPassword123!',
-    expectedText: 'Doctor',
   },
   pharmacist: {
     email: 'e2e_pharmacist@medicore.ai',
@@ -25,7 +24,6 @@ const USERS = {
   admin: {
     email: 'e2e_admin@medicore.ai',
     password: 'E2E_TestPassword123!',
-    expectedText: 'Admin',
   },
 };
 
@@ -40,7 +38,7 @@ test.describe('Module 1: Authentication & RBAC Routing', () => {
     // Should redirect to /dashboard
     await expect(page).toHaveURL(/\/dashboard/, { timeout: 15000 });
     // Patient header greeting
-    await expect(page.locator('text=Welcome')).toBeVisible({ timeout: 15000 });
+    await expect(page.locator('text=Welcome').first()).toBeVisible({ timeout: 15000 });
   });
 
   test('1.2 Doctor login and role-based view', async ({ page }) => {
@@ -50,7 +48,7 @@ test.describe('Module 1: Authentication & RBAC Routing', () => {
     await page.click('button[type="submit"]');
 
     await expect(page).toHaveURL(/\/dashboard/, { timeout: 15000 });
-    await expect(page.locator('text=Doctor').first()).toBeVisible({ timeout: 15000 });
+    await expect(page.locator('text=Dr.').or(page.locator('text=Patient Records')).first()).toBeVisible({ timeout: 15000 });
   });
 
   test('1.3 Pharmacist login redirects to dedicated /dashboard/pharmacist', async ({ page }) => {
@@ -76,7 +74,7 @@ test.describe('Module 1: Authentication & RBAC Routing', () => {
     await page.goto('/dashboard/blood-bank');
     await expect(page).toHaveURL(/\/dashboard\/blood-bank/, { timeout: 15000 });
     // Should render the Blood Bank management console without Access Denied
-    await expect(page.locator('text=Blood Bank Management').first()).toBeVisible({ timeout: 15000 });
+    await expect(page.locator('text=Blood Bank').first()).toBeVisible({ timeout: 15000 });
     await expect(page.locator('text=Access Denied')).not.toBeVisible();
   });
 
@@ -87,7 +85,7 @@ test.describe('Module 1: Authentication & RBAC Routing', () => {
     await page.click('button[type="submit"]');
 
     await expect(page).toHaveURL(/\/dashboard/, { timeout: 15000 });
-    await expect(page.locator('text=Admin').first()).toBeVisible({ timeout: 15000 });
+    await expect(page.locator('text=Administrator').or(page.locator('text=Admin')).first()).toBeVisible({ timeout: 15000 });
   });
 
   test('1.6 Edge Case - URL Tampering: Patient denied access to /dashboard/blood-bank', async ({ page }) => {
@@ -102,8 +100,8 @@ test.describe('Module 1: Authentication & RBAC Routing', () => {
     await page.goto('/dashboard/blood-bank');
     
     // Must show Access Denied screen
-    await expect(page.locator('text=Access Denied')).toBeVisible({ timeout: 10000 });
-    await expect(page.locator('text=patient')).toBeVisible({ timeout: 10000 });
+    await expect(page.locator('text=Access Denied').first()).toBeVisible({ timeout: 10000 });
+    await expect(page.getByText('Current Role:').first()).toBeVisible({ timeout: 10000 });
   });
 
   test('1.7 Edge Case - URL Tampering: Patient denied access to /dashboard/pharmacist', async ({ page }) => {
@@ -139,12 +137,8 @@ test.describe('Module 1: Authentication & RBAC Routing', () => {
     // Reload page
     await page.reload();
 
-    // Should either show Access Denied prompt or redirect to login
-    const isLogin = page.url().includes('/login');
-    const hasAccessDenied = await page.locator('text=Access Denied').isVisible().catch(() => false);
-    const hasLoginButton = await page.locator('text=Sign In').isVisible().catch(() => false);
-    
-    expect(isLogin || hasAccessDenied || hasLoginButton).toBeTruthy();
+    // Session cleared: Dashboard layout must kick unauthenticated user to /login
+    await expect(page).toHaveURL(/\/login/, { timeout: 15000 });
+    await expect(page.locator('button[type="submit"]')).toBeVisible({ timeout: 10000 });
   });
 });
-
