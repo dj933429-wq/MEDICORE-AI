@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
+import Link from 'next/link';
 import { useAuth } from '@/lib/auth';
 import { auth } from '@/lib/firebase';
 
@@ -47,6 +48,7 @@ export default function AdminDashboard() {
   const [updatingUid, setUpdatingUid] = useState<string | null>(null);
   const [successNotice, setSuccessNotice] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [quotaWarning, setQuotaWarning] = useState<string | null>(null);
 
   const fetchUsers = useCallback(async () => {
     if (!currentUser) return;
@@ -75,6 +77,7 @@ export default function AdminDashboard() {
 
       const data = await res.json();
       setUsers(data.users || []);
+      setQuotaWarning(data.warning || null);
 
       // Initialize selected roles map
       const initialRoles: Record<string, string> = {};
@@ -269,16 +272,27 @@ export default function AdminDashboard() {
             </h1>
             <p className="text-slate-500 text-lg">Manage platform users, privileged Custom Claims, and role assignments</p>
           </div>
-          <button
-            onClick={fetchUsers}
-            disabled={loading}
-            className="self-start md:self-auto inline-flex items-center gap-2 px-4 py-2.5 bg-white border border-slate-200 text-slate-700 rounded-xl hover:bg-slate-50 transition-colors shadow-sm font-medium text-sm disabled:opacity-50"
-          >
-            <svg className={`w-4 h-4 ${loading ? 'animate-spin text-blue-600' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-            </svg>
-            Refresh Directory
-          </button>
+          <div className="flex items-center gap-3 self-start md:self-auto flex-wrap">
+            <Link
+              href="/admin/user-log"
+              className="inline-flex items-center gap-2 px-4 py-2.5 bg-slate-900 hover:bg-slate-800 text-white rounded-xl transition-colors shadow-sm font-semibold text-sm"
+            >
+              <svg className="w-4 h-4 text-rose-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+              </svg>
+              Sign-In & Activity Log (HTML)
+            </Link>
+            <button
+              onClick={fetchUsers}
+              disabled={loading}
+              className="inline-flex items-center gap-2 px-4 py-2.5 bg-white border border-slate-200 text-slate-700 rounded-xl hover:bg-slate-50 transition-colors shadow-sm font-medium text-sm disabled:opacity-50"
+            >
+              <svg className={`w-4 h-4 ${loading ? 'animate-spin text-blue-600' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+              </svg>
+              Refresh Directory
+            </button>
+          </div>
         </header>
 
         {/* Global Notifications */}
@@ -408,33 +422,43 @@ export default function AdminDashboard() {
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
                 </svg>
               </div>
-              <h3 className="text-lg font-bold text-slate-800 mb-2">Firebase Admin SDK Credentials Required</h3>
-              <p className="text-sm text-slate-600 mb-6 leading-relaxed">
-                {error}
-              </p>
 
-              <div className="bg-slate-50 border border-slate-200 rounded-2xl p-5 text-left mb-6 text-xs text-slate-700 space-y-3">
-                <p className="font-semibold text-slate-800 flex items-center gap-2">
-                  <span className="w-5 h-5 rounded-full bg-blue-100 text-blue-700 flex items-center justify-center text-[10px]">1</span>
-                  Option 1: Add Service Account Key to .env.local (Recommended)
-                </p>
-                <p className="text-slate-500 pl-7 leading-relaxed">
-                  Go to <strong>Firebase Console &rarr; Project Settings &rarr; Service accounts</strong>, click <strong>Generate new private key</strong>, and add the minified JSON to your local <code>.env.local</code>:
-                </p>
-                <div className="pl-7">
-                  <pre className="bg-slate-900 text-slate-100 p-3 rounded-xl overflow-x-auto text-[11px] font-mono">
-                    FIREBASE_SERVICE_ACCOUNT_KEY=&#123;&quot;type&quot;:&quot;service_account&quot;,...&#125;
-                  </pre>
-                </div>
-
-                <p className="font-semibold text-slate-800 flex items-center gap-2 pt-2 border-t border-slate-200/60">
-                  <span className="w-5 h-5 rounded-full bg-blue-100 text-blue-700 flex items-center justify-center text-[10px]">2</span>
-                  Option 2: Google Cloud Application Default Credentials (ADC)
-                </p>
-                <p className="text-slate-500 pl-7 leading-relaxed">
-                  Run in terminal: <code>gcloud auth application-default login</code>
-                </p>
-              </div>
+              {error.toLowerCase().includes('credential') || error.toLowerCase().includes('service account') || error.toLowerCase().includes('no_adc_found') ? (
+                <>
+                  <h3 className="text-lg font-bold text-slate-800 mb-2">Firebase Admin SDK Credentials Required</h3>
+                  <p className="text-sm text-slate-600 mb-6 leading-relaxed">
+                    {error}
+                  </p>
+                  <div className="bg-slate-50 border border-slate-200 rounded-2xl p-5 text-left mb-6 text-xs text-slate-700 space-y-3">
+                    <p className="font-semibold text-slate-800 flex items-center gap-2">
+                      <span className="w-5 h-5 rounded-full bg-blue-100 text-blue-700 flex items-center justify-center text-[10px]">1</span>
+                      Option 1: Add Service Account Key to .env.local (Recommended)
+                    </p>
+                    <p className="text-slate-500 pl-7 leading-relaxed">
+                      Go to <strong>Firebase Console &rarr; Project Settings &rarr; Service accounts</strong>, click <strong>Generate new private key</strong>, and add the minified JSON to your local <code>.env.local</code>:
+                    </p>
+                    <div className="pl-7">
+                      <pre className="bg-slate-900 text-slate-100 p-3 rounded-xl overflow-x-auto text-[11px] font-mono">
+                        FIREBASE_SERVICE_ACCOUNT_KEY=&#123;&quot;type&quot;:&quot;service_account&quot;,...&#125;
+                      </pre>
+                    </div>
+                  </div>
+                </>
+              ) : error.includes('RESOURCE_EXHAUSTED') || error.toLowerCase().includes('quota') ? (
+                <>
+                  <h3 className="text-lg font-bold text-slate-800 mb-2">Cloud Firestore Daily Quota Limit Reached</h3>
+                  <p className="text-sm text-slate-600 mb-6 leading-relaxed">
+                    The Google Cloud free-tier Spark plan daily read/write quota (50,000 reads/day) for Cloud Firestore has temporarily been reached on project <code>medicore-ai-exhibition</code>. Daily quotas reset automatically at midnight US Pacific Time (13:30 IST).
+                  </p>
+                </>
+              ) : (
+                <>
+                  <h3 className="text-lg font-bold text-slate-800 mb-2">Failed to Load User Directory</h3>
+                  <p className="text-sm text-slate-600 mb-6 leading-relaxed">
+                    {error}
+                  </p>
+                </>
+              )}
 
               <button
                 onClick={fetchUsers}
@@ -448,6 +472,14 @@ export default function AdminDashboard() {
             </div>
           ) : (
             <div className="overflow-x-auto">
+              {quotaWarning && (
+                <div className="mx-6 my-4 p-3.5 bg-amber-50 border border-amber-200 rounded-2xl text-amber-800 text-xs flex items-center gap-2.5">
+                  <svg className="w-4 h-4 text-amber-600 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                  <span>{quotaWarning}</span>
+                </div>
+              )}
               <table className="w-full text-left border-collapse">
                 <thead>
                   <tr className="bg-slate-50/75 text-slate-500 text-xs uppercase tracking-wider border-b border-slate-100">

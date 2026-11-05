@@ -224,10 +224,30 @@ export const signup = async (email, password, name, role, gender) => {
 
 export const login = async (email, password) => {
   const userCredential = await signInWithEmailAndPassword(auth, email, password);
+  try {
+    const userDocRef = doc(db, 'users', userCredential.user.uid);
+    await setDoc(userDocRef, { 
+      lastLoginAt: new Date().toISOString() 
+    }, { merge: true });
+  } catch (err) {
+    console.warn("Could not update lastLoginAt on login:", err);
+  }
   return userCredential.user;
 };
 
 export const logout = async () => {
+  try {
+    if (auth.currentUser) {
+      const userDocRef = doc(db, 'users', auth.currentUser.uid);
+      await setDoc(userDocRef, {
+        isOnline: false,
+        lastSeenAt: new Date().toISOString(),
+        lastSessionEndedAt: new Date().toISOString(),
+      }, { merge: true });
+    }
+  } catch {
+    // Non-critical presence cleanup
+  }
   await firebaseSignOut(auth);
 };
 

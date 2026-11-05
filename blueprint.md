@@ -390,4 +390,45 @@ Tested and confirmed 8 genuine issues identified during live QA testing of `http
   - `npm run lint`: 0 Errors.
   - `npm run build`: Successful compilation across all 18 routes.
 
+---
+
+### Local Architecture: Admin User Access, Real-Time Presence & Activity Log (`/admin/user-log`)
+
+- **Scope:** Dedicated standalone backend HTML view and API route designed strictly for local testing/administration (held offline from remote Git and Vercel production as explicitly instructed).
+- **Security & Authorization:**
+  - Strictly restricted to users with `role: 'admin'` (authenticated Custom Claim or verified Firestore role).
+  - Unauthenticated requests or non-admin users (e.g. patients, doctors, pharmacists, blood bank staff) receive an immediate `403 Forbidden` response.
+- **Real-Time Presence & Interaction Tracking Architecture:**
+  - `src/components/PresenceTracker.tsx`: Client-side tracker mounted within root `Providers` (`src/app/providers.tsx`), running automatically for any logged-in user across all dashboards (patient, doctor, pharmacist, blood-bank, admin).
+    - **Live Interaction & Scroll Monitor:** Throttled listeners on `scroll`, `click`, `mousemove`, `keydown` keep `lastSeenAt` fresh and record the user's active interaction type (`scroll`, `click`, etc.).
+    - **Heartbeat:** 20-second background heartbeat pings Firestore while tab is active and visible.
+    - **Exit & Tab Switch Detection:** `visibilitychange` (`hidden`) and `beforeunload` calculate session duration and trigger `navigator.sendBeacon('/api/presence/beacon')` to record session finish and set `isOnline: false`.
+    - **Resumption:** When user refocuses the tab, a new session start window is established.
+  - `src/app/api/presence/beacon/route.ts`: Receives beacon payloads via Firebase Admin SDK, setting `isOnline: false`, `lastSeenAt`, `lastSessionEndedAt`, calculating `lastSessionDurationSec`, and incrementing cumulative `totalTimeSpentSec`.
+  - `src/lib/auth.js`: Updated `login()` to track `lastLoginAt` and `logout()` to immediately set `isOnline: false` before Firebase Auth session teardown.
+- **Backend Admin API & Standalone HTML View:**
+  - `src/app/api/admin/user-log/route.ts`:
+    - Evaluates live presence: User is `Online` if marked `isOnline` AND `(now - lastSeenAt) < 45 seconds`; otherwise evaluated as `Offline`.
+    - Computes active time window ("From [time] -> Active Now / [end time]") and formatted duration.
+    - Tracks total cumulative time spent in role (`totalTimeSpentSec` formatted as hours, minutes, seconds).
+    - Supports sorting by: `online_first`, `total_time`, `last_signin`, `signup`.
+    - Supports filtering by presence: `all`, `online_only`, `offline_only`.
+    - When `?format=html` is supplied, renders a styled standalone HTML page with live auto-refresh toggle (10s), export/print capabilities, and color-coded role and presence badges.
+- **Admin Management Console UI:**
+  - `src/app/admin/user-log/page.tsx`:
+    - Live presence counter (Active Users Online, Users Offline, Total Registered).
+    - Sort toggles (`Online First`, `Total Time`, `Sign-In`).
+    - Presence filter tabs (`All`, `Online Only`, `Offline Only`).
+    - Interactive search across name, email, UID, and role.
+    - Configurable 10-second auto-refresh polling.
+    - One-click launcher to open the raw backend HTML view in a new tab.
+  - `src/app/dashboard/AdminDashboard.tsx`: Direct navigation button `"Sign-In & Activity Log (HTML)"` in the Admin header.
+
+- **Inactivity Session Timeout (10 Minutes):**
+  - **Component:** `src/components/SessionTimeoutManager.tsx` mounted globally in `src/app/providers.tsx`.
+  - **Specification:** Automatically terminates session if no user activity (`mousemove`, `mousedown`, `keydown`, `scroll`, `touchstart`, `click`) occurs for 10 consecutive minutes (600,000 ms).
+  - **Cross-Tab & Refresh Persistence:** Synchronizes `medicore_last_activity` epoch timestamp in `localStorage` across tabs via `window.addEventListener('storage', ...)`.
+  - **Graceful Redirection & Notice:** On expiration, calls `logout()`, cleans localStorage, and redirects to `/login?reason=session_expired`. The sign-in page displays a security notice notifying the user that their session expired due to 10 minutes of inactivity.
+
+
 

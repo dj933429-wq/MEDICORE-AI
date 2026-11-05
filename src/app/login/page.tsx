@@ -11,6 +11,15 @@ export default function LoginPage() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
+  const [sessionNotice] = useState<string | null>(() => {
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      if (params.get('reason') === 'session_expired') {
+        return 'Your session expired due to 10 minutes of inactivity. Please sign in again.';
+      }
+    }
+    return null;
+  });
   const [isLoading, setIsLoading] = useState(false);
   const router = useRouter();
   const { user, loading } = useAuth();
@@ -71,6 +80,15 @@ export default function LoginPage() {
         <div className="text-center mb-8">
           <h2 className="text-3xl font-bold text-gray-900">Sign In</h2>
         </div>
+
+        {sessionNotice && (
+          <div className="mb-6 p-4 rounded-lg bg-amber-50 text-amber-800 text-sm border border-amber-200 flex items-center gap-2.5">
+            <svg className="w-5 h-5 text-amber-600 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+            <span>{sessionNotice}</span>
+          </div>
+        )}
 
         {error && (
           <div className="mb-6 p-4 rounded-lg bg-red-50 text-red-700 text-sm border border-red-200">

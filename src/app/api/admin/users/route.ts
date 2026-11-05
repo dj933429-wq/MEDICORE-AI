@@ -42,12 +42,19 @@ export async function GET(req: Request) {
   }
 
   try {
-    // 1. Fetch all Firestore user profile records
-    const usersSnap = await adminDb.collection('users').get();
+    // 1. Fetch all Firestore user profile records (gracefully fall back if Firestore quota is exhausted)
     const firestoreUsersMap = new Map<string, Record<string, unknown>>();
-    usersSnap.forEach(doc => {
-      firestoreUsersMap.set(doc.id, doc.data());
-    });
+    let firestoreQuotaExceeded = false;
+    try {
+      const usersSnap = await adminDb.collection('users').get();
+      usersSnap.forEach(doc => {
+        firestoreUsersMap.set(doc.id, doc.data());
+      });
+    } catch (fsErr: unknown) {
+      const fsMsg = fsErr instanceof Error ? fsErr.message : String(fsErr);
+      console.warn('[AdminUsersAPI] Firestore read bypassed (Quota/Offline). Falling back to Firebase Auth directory:', fsMsg);
+      firestoreQuotaExceeded = true;
+    }
 
     // 2. Fetch all Auth users to retrieve real, authoritative Custom Claims
     const authUsersResult = await adminAuth.listUsers(1000);
@@ -92,7 +99,10 @@ export async function GET(req: Request) {
       return (a.name || '').localeCompare(b.name || '');
     });
 
-    return NextResponse.json({ users: userList }, { status: 200 });
+    return NextResponse.json({ 
+      users: userList, 
+      warning: firestoreQuotaExceeded ? 'Firebase Firestore daily free quota reached; displaying authoritative Firebase Authentication records.' : undefined 
+    }, { status: 200 });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
     console.error('[AdminUsersAPI] Failed to fetch users:', message);
