@@ -2,9 +2,11 @@ import 'server-only';
 import { initializeApp, getApps, cert, applicationDefault, App } from 'firebase-admin/app';
 import { getAuth, Auth } from 'firebase-admin/auth';
 import { getFirestore, Firestore } from 'firebase-admin/firestore';
+import { getDatabase, Database } from 'firebase-admin/database';
 
 const EXPECTED_PROJECT_ID = 'medicore-ai-exhibition';
 const APP_NAME = 'medicore-admin';
+const DEFAULT_DATABASE_URL = 'https://medicore-ai-exhibition-default-rtdb.asia-southeast1.firebasedatabase.app';
 
 function getAdminApp(): App {
   const existingApp = getApps().find(app => app.name === APP_NAME);
@@ -15,6 +17,10 @@ function getAdminApp(): App {
   const projectId = process.env.FIREBASE_ADMIN_PROJECT_ID || 
                     process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID || 
                     EXPECTED_PROJECT_ID;
+
+  const databaseURL = process.env.FIREBASE_DATABASE_URL || 
+                      process.env.NEXT_PUBLIC_FIREBASE_DATABASE_URL || 
+                      DEFAULT_DATABASE_URL;
 
   if (projectId !== EXPECTED_PROJECT_ID) {
     console.warn(`[FirebaseAdmin] Warning: Expected project ID ${EXPECTED_PROJECT_ID}, but got ${projectId}`);
@@ -34,7 +40,8 @@ function getAdminApp(): App {
       }
       return initializeApp({
         credential: cert(parsedKey),
-        projectId
+        projectId,
+        databaseURL,
       }, APP_NAME);
     } catch (parseErr) {
       console.error('[FirebaseAdmin] Failed to parse service account JSON from environment:', parseErr);
@@ -51,7 +58,8 @@ function getAdminApp(): App {
         clientEmail,
         privateKey
       }),
-      projectId
+      projectId,
+      databaseURL,
     }, APP_NAME);
   }
 
@@ -59,12 +67,14 @@ function getAdminApp(): App {
   try {
     return initializeApp({
       credential: applicationDefault(),
-      projectId
+      projectId,
+      databaseURL,
     }, APP_NAME);
   } catch {
     // 4. Default initialization for local emulators or basic project binding
     return initializeApp({
-      projectId
+      projectId,
+      databaseURL,
     }, APP_NAME);
   }
 }
@@ -72,3 +82,4 @@ function getAdminApp(): App {
 export const adminApp = getAdminApp();
 export const adminAuth: Auth = getAuth(adminApp);
 export const adminDb: Firestore = getFirestore(adminApp);
+export const adminRtdb: Database = getDatabase(adminApp);

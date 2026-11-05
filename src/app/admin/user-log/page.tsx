@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import Link from 'next/link';
 import { useAuth } from '@/lib/auth';
 
@@ -10,41 +10,60 @@ interface UserLogRecord {
   email: string;
   role: 'admin' | 'doctor' | 'pharmacist' | 'blood_bank' | 'patient';
   isOnline: boolean;
-  timeSinceLastSeenMs: number;
-  lastInteractionType: string;
-  sessionStartedAt: string | null;
-  sessionEndedAt: string | null;
+  activeConnectionsCount: number;
+  lastLogoutReason: string | null;
+  lastLoginAt: string | null;
+  lastLoginEpoch: number;
+  lastLogoutAt: string | null;
+  lastActivityAt: string | null;
+  lastActivityEpoch: number;
   currentSessionSec: number;
   currentSessionFormatted: string;
   totalTimeSpentSec: number;
   totalTimeSpentFormatted: string;
   createdAt: string | null;
   createdEpoch: number;
-  lastSignInAt: string | null;
-  lastSignInEpoch: number;
-  lastSeenAt: string | null;
-  lastSeenEpoch: number;
   disabled: boolean;
 }
+
+const AUTO_REFRESH_INTERVAL_MS = 60000; // Exact 60 seconds
 
 export default function UserLogPage() {
   const { user, loading: authLoading } = useAuth();
   const [records, setRecords] = useState<UserLogRecord[]>([]);
   const [onlineCount, setOnlineCount] = useState(0);
   const [offlineCount, setOfflineCount] = useState(0);
-  const [loading, setLoading] = useState(true);
+  const [initialLoading, setInitialLoading] = useState(true);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [lastUpdated, setLastUpdated] = useState<string>('');
   const [error, setError] = useState<string | null>(null);
   const [sortBy, setSortBy] = useState<'last_signin' | 'signup' | 'online_first' | 'total_time'>('online_first');
   const [roleFilter, setRoleFilter] = useState<string>('all');
   const [presenceFilter, setPresenceFilter] = useState<'all' | 'online_only' | 'offline_only'>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [adminToken, setAdminToken] = useState<string>('');
-  const [autoRefresh, setAutoRefresh] = useState(true);
+  const [autoRefreshEnabled, setAutoRefreshEnabled] = useState(true);
 
-  const fetchLogs = useCallback(async (isSilent = false) => {
+  // Guard against overlapping concurrent requests
+  const isFetchingRef = useRef<boolean>(false);
+  const abortControllerRef = useRef<AbortController | null>(null);
+
+  const fetchLogs = useCallback(async (isBackground = false) => {
     if (!user || user.role !== 'admin') return;
-    if (!isSilent) setLoading(true);
+    if (isFetchingRef.current) return; // Prevent overlapping requests
+
+    isFetchingRef.current = true;
+    if (!isBackground) {
+      setIsRefreshing(true);
+    }
     setError(null);
+
+    // Cancel any previous in-flight request
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+    const abortController = new AbortController();
+    abortControllerRef.current = abortController;
 
     try {
       const token = typeof user.getIdToken === 'function' ? await user.getIdToken() : '';
@@ -61,6 +80,7 @@ export default function UserLogPage() {
         headers: {
           Authorization: `Bearer ${token}`,
         },
+        signal: abortController.signal,
       });
 
       if (!res.ok) {
@@ -72,28 +92,63 @@ export default function UserLogPage() {
       setRecords(data.users || []);
       setOnlineCount(data.onlineCount || 0);
       setOfflineCount(data.offlineCount || 0);
+      setLastUpdated(new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
     } catch (err: unknown) {
+      if ((err as Error)?.name === 'AbortError') return;
       const msg = err instanceof Error ? err.message : String(err);
       setError(msg);
+      // Preserves existing records; does not overwrite with empty on refresh error
     } finally {
-      if (!isSilent) setLoading(false);
+      isFetchingRef.current = false;
+      setIsRefreshing(false);
+      setInitialLoading(false);
     }
   }, [user, sortBy, roleFilter, presenceFilter]);
 
+  // Initial load
   useEffect(() => {
     if (!authLoading && user && user.role === 'admin') {
-      fetchLogs();
+      fetchLogs(false);
     }
   }, [authLoading, user, fetchLogs]);
 
-  // Periodic Auto-refresh (every 10 seconds)
+  // Exact 60-Second Automatic Refresh with visibility detection
   useEffect(() => {
-    if (!autoRefresh || authLoading || !user || user.role !== 'admin') return;
-    const interval = setInterval(() => {
-      fetchLogs(true);
-    }, 10000);
-    return () => clearInterval(interval);
-  }, [autoRefresh, authLoading, user, fetchLogs]);
+    if (!autoRefreshEnabled || authLoading || !user || user.role !== 'admin') return;
+
+    let refreshTimer: NodeJS.Timeout | null = null;
+
+    const startTimer = () => {
+      if (refreshTimer) clearInterval(refreshTimer);
+      refreshTimer = setInterval(() => {
+        if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
+          fetchLogs(true);
+        }
+      }, AUTO_REFRESH_INTERVAL_MS);
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        // Immediately fetch fresh information on tab regain, then reset 60s cycle
+        fetchLogs(true);
+        startTimer();
+      } else {
+        // Pause timer while hidden
+        if (refreshTimer) clearInterval(refreshTimer);
+      }
+    };
+
+    startTimer();
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      if (refreshTimer) clearInterval(refreshTimer);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
+      }
+    };
+  }, [autoRefreshEnabled, authLoading, user, fetchLogs]);
 
   // Authorization Check
   if (authLoading) {
@@ -129,6 +184,7 @@ export default function UserLogPage() {
     );
   }
 
+  // Filter records based on active search
   const filteredRecords = records.filter((r) => {
     if (!searchQuery.trim()) return true;
     const q = searchQuery.toLowerCase();
@@ -184,13 +240,13 @@ export default function UserLogPage() {
               <span className="px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider bg-rose-500/20 text-rose-400 border border-rose-500/30">
                 Backend Admin Console
               </span>
-              <span className="text-xs text-slate-500 font-mono">Real-Time Presence & Activity</span>
+              <span className="text-xs text-slate-500 font-mono">Firebase RTDB Engine</span>
             </div>
             <h1 className="text-2xl sm:text-3xl font-extrabold text-white mt-2">
               User Presence & Role Activity Log
             </h1>
             <p className="text-sm text-slate-400 mt-1 max-w-2xl leading-relaxed">
-              Live online/offline tracking, page activity & scroll monitor, active session time range, and cumulative role duration.
+              Real-time multi-tab presence, session window accounting, and cumulative role duration powered by Realtime Database.
             </p>
           </div>
 
@@ -250,7 +306,7 @@ export default function UserLogPage() {
           </div>
         </div>
 
-        {/* Filter & Search Bar */}
+        {/* Filter, Search & Refresh Controls */}
         <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 sm:p-6 space-y-4">
           <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
             
@@ -319,7 +375,7 @@ export default function UserLogPage() {
             </div>
           </div>
 
-          {/* Role Pills & Auto-Refresh Toggle */}
+          {/* Role Filter & Refresh Action Toolbar */}
           <div className="flex flex-wrap items-center justify-between gap-3 pt-2 border-t border-slate-800/60">
             <div className="flex flex-wrap items-center gap-1.5">
               <span className="text-xs text-slate-400 font-medium mr-2">Role Filter:</span>
@@ -338,43 +394,70 @@ export default function UserLogPage() {
               ))}
             </div>
 
-            <div className="flex items-center gap-4">
-              <label className="flex items-center gap-2 cursor-pointer text-xs text-slate-400">
+            <div className="flex items-center gap-3">
+              {/* Last Updated Time Display */}
+              {lastUpdated && (
+                <span className="text-[11px] text-slate-400 font-mono hidden sm:inline">
+                  Last updated: {lastUpdated}
+                </span>
+              )}
+
+              {/* 60s Auto-Refresh Toggle */}
+              <label className="flex items-center gap-2 cursor-pointer text-xs text-slate-400 select-none">
                 <input
                   type="checkbox"
-                  checked={autoRefresh}
-                  onChange={(e) => setAutoRefresh(e.target.checked)}
+                  checked={autoRefreshEnabled}
+                  onChange={(e) => setAutoRefreshEnabled(e.target.checked)}
                   className="rounded border-slate-700 bg-slate-950 text-rose-600 focus:ring-0"
                 />
-                <span>Auto-Refresh (10s)</span>
+                <span>Auto-Refresh (60s)</span>
               </label>
 
+              {/* Explicit Manual Refresh Button */}
               <button
-                onClick={() => fetchLogs()}
-                className="text-xs text-slate-300 hover:text-white px-3 py-1.5 bg-slate-800 hover:bg-slate-700 rounded-lg border border-slate-700 transition"
+                onClick={() => fetchLogs(false)}
+                disabled={isRefreshing}
+                className="inline-flex items-center gap-2 px-3.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-white text-xs font-semibold rounded-lg border border-slate-700 transition disabled:opacity-50"
               >
-                Refresh Data
+                {isRefreshing ? (
+                  <>
+                    <div className="w-3.5 h-3.5 border-2 border-white/20 border-t-white rounded-full animate-spin" />
+                    <span>Refreshing...</span>
+                  </>
+                ) : (
+                  <>
+                    <svg className="w-3.5 h-3.5 text-slate-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                    </svg>
+                    <span>Manual Refresh</span>
+                  </>
+                )}
               </button>
             </div>
           </div>
         </div>
 
-        {/* Error Notification */}
+        {/* Error Notification (Without replacing existing data) */}
         {error && (
-          <div className="p-4 bg-rose-500/10 border border-rose-500/30 rounded-2xl text-rose-400 text-sm flex items-center gap-3">
-            <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-            </svg>
-            <span>{error}</span>
+          <div className="p-4 bg-rose-500/10 border border-rose-500/30 rounded-2xl text-rose-400 text-sm flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2.5">
+              <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+              <span>{error}</span>
+            </div>
+            <button onClick={() => setError(null)} className="text-xs text-rose-400/80 hover:text-white underline">
+              Dismiss
+            </button>
           </div>
         )}
 
         {/* Main Data Table */}
         <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-xl">
-          {loading ? (
+          {initialLoading ? (
             <div className="p-16 flex flex-col items-center justify-center">
               <div className="w-10 h-10 border-4 border-rose-500/20 border-t-rose-500 rounded-full animate-spin mb-4" />
-              <p className="text-xs text-slate-400 font-semibold tracking-wider">Syncing User Presence & Logs...</p>
+              <p className="text-xs text-slate-400 font-semibold tracking-wider">Connecting to Realtime Database Engine...</p>
             </div>
           ) : filteredRecords.length === 0 ? (
             <div className="p-16 text-center text-slate-500">
@@ -390,7 +473,7 @@ export default function UserLogPage() {
                     <th className="py-3 px-4">Email</th>
                     <th className="py-3 px-4">Role</th>
                     <th className="py-3 px-4">Presence Status</th>
-                    <th className="py-3 px-4">Active Time Window (From - To)</th>
+                    <th className="py-3 px-4">Active Time Window</th>
                     <th className="py-3 px-4">Total Time in Role</th>
                     <th className="py-3 px-4">Last Sign-In</th>
                     <th className="py-3 px-4">Account Created</th>
@@ -430,8 +513,8 @@ export default function UserLogPage() {
                                 <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
                                 ONLINE
                               </span>
-                              <div className="text-[10px] text-emerald-500/80 font-mono capitalize">
-                                {item.lastInteractionType || 'scrolling'}
+                              <div className="text-[10px] text-emerald-500/80 font-mono">
+                                {item.activeConnectionsCount > 1 ? `${item.activeConnectionsCount} active tabs` : '1 active tab'}
                               </div>
                             </div>
                           ) : (
@@ -440,36 +523,36 @@ export default function UserLogPage() {
                                 <span className="w-2 h-2 rounded-full bg-slate-500" />
                                 OFFLINE
                               </span>
-                              <div className="text-[10px] text-slate-500 font-mono">
-                                {item.lastSeenAt ? `Last: ${formatTimeOnly(item.lastSeenAt)}` : 'No activity'}
+                              <div className="text-[10px] text-slate-500 font-mono capitalize">
+                                {item.lastLogoutReason ? item.lastLogoutReason.replace('_', ' ') : 'disconnected'}
                               </div>
                             </div>
                           )}
                         </td>
 
-                        {/* Active Time Window ("From what time to what time they are online") */}
+                        {/* Active Time Window */}
                         <td className="py-3.5 px-4">
                           {item.isOnline ? (
                             <div>
                               <div className="text-emerald-400 font-semibold text-xs">
-                                From {formatTimeOnly(item.sessionStartedAt)} &rarr; Active Now
+                                From {formatTimeOnly(item.lastLoginAt)} &rarr; Active Now
                               </div>
                               <div className="text-[10px] text-emerald-500 font-mono mt-0.5">
                                 Ongoing ({item.currentSessionFormatted})
                               </div>
                             </div>
-                          ) : item.sessionStartedAt && item.sessionEndedAt ? (
+                          ) : item.lastLoginAt && item.lastLogoutAt ? (
                             <div>
                               <div className="text-slate-300 font-medium text-xs">
-                                {formatTimeOnly(item.sessionStartedAt)} &rarr; {formatTimeOnly(item.sessionEndedAt)}
+                                {formatTimeOnly(item.lastLoginAt)} &rarr; {formatTimeOnly(item.lastLogoutAt)}
                               </div>
-                              <div className="text-[10px] text-slate-500 font-mono mt-0.5">
-                                Session: {item.currentSessionFormatted}
+                              <div className="text-[10px] text-slate-500 font-mono mt-0.5 capitalize">
+                                Reason: {item.lastLogoutReason ? item.lastLogoutReason.replace('_', ' ') : 'Session ended'}
                               </div>
                             </div>
                           ) : (
                             <div className="text-slate-500 italic text-[11px]">
-                              {item.lastSeenAt ? `Last seen ${formatTimeOnly(item.lastSeenAt)}` : 'No session data'}
+                              {item.lastActivityAt ? `Last active: ${formatTimeOnly(item.lastActivityAt)}` : 'No session data'}
                             </div>
                           )}
                         </td>
@@ -481,7 +564,7 @@ export default function UserLogPage() {
 
                         {/* Last Sign-In */}
                         <td className="py-3.5 px-4">
-                          {formatTimestamp(item.lastSignInAt)}
+                          {formatTimestamp(item.lastLoginAt)}
                         </td>
 
                         {/* Account Created */}
@@ -499,7 +582,7 @@ export default function UserLogPage() {
 
         {/* Footer info */}
         <div className="text-center text-xs text-slate-500 pt-4">
-          MEDICORE-AI Secure Presence & Audit System &bull; Local Development Only (Strict Admin Access)
+          MEDICORE-AI Realtime Activity System &bull; 60s Refresh Cycle &bull; Zero Firestore Document Quota
         </div>
       </div>
     </div>

@@ -238,12 +238,17 @@ export const login = async (email, password) => {
 export const logout = async () => {
   try {
     if (auth.currentUser) {
-      const userDocRef = doc(db, 'users', auth.currentUser.uid);
-      await setDoc(userDocRef, {
-        isOnline: false,
-        lastSeenAt: new Date().toISOString(),
-        lastSessionEndedAt: new Date().toISOString(),
-      }, { merge: true });
+      const token = await auth.currentUser.getIdToken().catch(() => '');
+      if (token) {
+        await fetch('/api/presence/session', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({ action: 'logout', reason: 'explicit_logout' }),
+        }).catch(() => {});
+      }
     }
   } catch {
     // Non-critical presence cleanup

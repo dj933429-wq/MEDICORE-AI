@@ -430,5 +430,53 @@ Tested and confirmed 8 genuine issues identified during live QA testing of `http
   - **Cross-Tab & Refresh Persistence:** Synchronizes `medicore_last_activity` epoch timestamp in `localStorage` across tabs via `window.addEventListener('storage', ...)`.
   - **Graceful Redirection & Notice:** On expiration, calls `logout()`, cleans localStorage, and redirects to `/login?reason=session_expired`. The sign-in page displays a security notice notifying the user that their session expired due to 10 minutes of inactivity.
 
+---
+
+### Completed: Phase 3 — Firebase Realtime Database (RTDB) Presence & Activity Monitoring Migration
+
+- **Core Motivation & Quota Optimization:**
+  - Migrated high-frequency presence heartbeats and session activity tracking completely off Cloud Firestore to Firebase Realtime Database (RTDB).
+  - Cloud Firestore free tier imposes a strict 50,000 reads / 20,000 writes daily quota, which was previously exhausted by frequent telemetry writes (`8 RESOURCE_EXHAUSTED`).
+  - RTDB provides unlimited read/write operations on the Spark free tier (constrained only by 10 GB bandwidth/month and 100 simultaneous connections), completely eliminating quota errors.
+
+- **Infrastructure & Dual-Database Architecture:**
+  - **Firestore (Default, `asia-south1` Mumbai):** Preserved 100% intact for patient medical records, clinical timelines, appointments, pharmacist inventory, blood bank management, and menstrual cycle tracking.
+  - **RTDB (`medicore-ai-exhibition-default-rtdb`, `asia-southeast1` Singapore):** Dedicated exclusively to ephemeral multi-tab presence (`/presence`) and aggregated session activity (`/activity`).
+  - **Client Initialization (`src/lib/firebase.js`):** Exports `rtdb = getDatabase(app)` configured with `NEXT_PUBLIC_FIREBASE_DATABASE_URL`.
+  - **Admin SDK Initialization (`src/lib/firebaseAdmin.ts`):** Exports `adminRtdb = getDatabase(adminApp)` with `databaseURL` configured across all credential pathways (ADC and Service Account).
+
+- **Strict RTDB Security Rules (`database.rules.json`):**
+  - `/presence/$uid/$connectionKey`: Owner-only write (`auth != null && auth.uid === $uid`), read allowed for owner and admins (`auth.token.role === 'admin'`).
+  - `/activity/$uid`: Client write strictly denied (`.write: false`), ensuring all login/logout metrics, timestamps, and accumulated durations are written solely by the trusted Admin SDK backend. Read allowed for owner and admins.
+
+- **Trusted Session Management API (`/api/presence/session`):**
+  - Authenticates user via Firebase Auth ID token (Bearer).
+  - Handles 4 lifecycle actions: `login`, `activity` (heartbeat), `logout`, and `timeout`.
+  - Derives server timestamps and connection keys (`conn_${timestamp}_${random}`).
+  - Tracks accumulated time in role (`totalTimeSpentSeconds`) across sessions.
+  - Distinguishes intentional sign-outs (`explicit_logout`), session expiration (`inactivity_timeout`), and connection drops (`connection_drop`).
+
+- **Client Presence Lifecycle (`src/components/PresenceTracker.tsx`):**
+  - On mount, requests trusted connection key from `/api/presence/session`.
+  - Attaches RTDB `onDisconnect(connectionRef).remove()` so unexpected browser/tab closes automatically prune the active connection key.
+  - Emits throttled activity heartbeats every 60 seconds (only when tab is active and visible).
+  - Multi-tab support: Each open tab possesses its own connection key under `/presence/{uid}/{connectionKey}`. Closing one tab keeps the user `online` as long as other tabs remain open; status shifts to `offline` only when all keys are removed.
+
+- **Admin User Monitoring UI & API (`/admin/user-log`):**
+  - **60-Second Background Polling:** Refreshes data without full-page reloads, non-disruptive to user interaction.
+  - **Visibility Awareness:** Polling automatically pauses when the browser tab is hidden/minimized and executes an immediate refresh as soon as the tab becomes visible again.
+  - **State Retention:** Preserves active search terms, presence filters (`All`, `Online`, `Offline`), column sorting, and pagination across all refreshes.
+  - **Manual Refresh:** Interactive button with animated spinner and "Last updated" time-ago indicator.
+  - **HTML View:** Server-rendered fallback at `/api/admin/user-log?format=html` with aligned 60s auto-refresh toggle.
+
+- **Verification & Zero-Regression Certification:**
+  - `npx tsc --noEmit`: 0 TypeScript errors.
+  - `npm run lint`: 0 ESLint errors.
+  - `npm run build`: Production build cleanly compiled across all 22 static and dynamic routes.
+  - `npm run test:admin`: 13/13 passing.
+  - `npm run test:cycle`: 46/46 passing.
+  - `tests/rtdb-presence-activity.test.mjs`: 8/8 comprehensive integration assertions passing against live RTDB.
+
+
 
 

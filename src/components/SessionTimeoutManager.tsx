@@ -43,6 +43,22 @@ export default function SessionTimeoutManager() {
       }
 
       try {
+        const token = typeof user?.getIdToken === 'function' ? await user.getIdToken() : '';
+        if (token) {
+          await fetch('/api/presence/session', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${token}`,
+            },
+            body: JSON.stringify({ action: 'timeout', reason: 'inactivity_timeout' }),
+          }).catch(() => {});
+        }
+      } catch {
+        // Ignore network failure on timeout notice
+      }
+
+      try {
         await logout();
       } catch (err) {
         console.warn('[SessionTimeout] Error during inactivity logout:', err);

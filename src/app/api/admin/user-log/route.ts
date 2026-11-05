@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { adminAuth, adminDb } from '@/lib/firebaseAdmin';
+import { adminAuth, adminRtdb, adminDb } from '@/lib/firebaseAdmin';
 
 /**
  * Verify caller has Administrator privileges (via Custom Claim or verified Firestore role)
@@ -99,37 +99,53 @@ export async function GET(req: Request) {
   const queryToken = url.searchParams.get('token') || '';
 
   try {
-    // 1. Fetch Firestore user documents (gracefully fall back if Firestore quota is exhausted)
-    const firestoreMap = new Map<string, Record<string, unknown>>();
+    // 1. Fetch Realtime Database presence and activity nodes (Immune to Firestore document quotas)
+    let presenceMap: Record<string, Record<string, unknown>> = {};
+    let activityMap: Record<string, Record<string, unknown>> = {};
+
     try {
-      const usersSnap = await adminDb.collection('users').get();
-      usersSnap.forEach((doc) => {
-        firestoreMap.set(doc.id, doc.data());
-      });
-    } catch (fsErr: unknown) {
-      const fsMsg = fsErr instanceof Error ? fsErr.message : String(fsErr);
-      console.warn('[AdminUserLogAPI] Firestore read bypassed (Quota/Offline). Falling back to Auth metadata:', fsMsg);
+      const [presenceSnap, activitySnap] = await Promise.all([
+        adminRtdb.ref('presence').once('value'),
+        adminRtdb.ref('activity').once('value'),
+      ]);
+      presenceMap = presenceSnap.val() || {};
+      activityMap = activitySnap.val() || {};
+    } catch (rtdbErr) {
+      console.warn('[AdminUserLogAPI] RTDB read error (falling back to Auth):', rtdbErr);
     }
 
-    // 2. Fetch Firebase Authentication user records
+    // 2. Fetch Firebase Authentication user records (authoritative identity & claims)
     const authResult = await adminAuth.listUsers(1000);
     const authMap = new Map<string, (typeof authResult.users)[0]>();
     authResult.users.forEach((u) => {
       authMap.set(u.uid, u);
     });
 
-    // 3. Compile active presence and session data
-    const allUids = new Set([...firestoreMap.keys(), ...authMap.keys()]);
+    // 3. Gracefully fetch Firestore user documents for display profiles (without failing if quota reached)
+    const firestoreMap = new Map<string, Record<string, unknown>>();
+    try {
+      const usersSnap = await adminDb.collection('users').get();
+      usersSnap.forEach((doc) => {
+        firestoreMap.set(doc.id, doc.data());
+      });
+    } catch {
+      // Non-critical fallback for profile display names
+    }
+
+    // 4. Compile active presence and session data
+    const allUids = new Set([...authMap.keys(), ...Object.keys(presenceMap), ...Object.keys(activityMap)]);
     const records = [];
     const nowEpoch = Date.now();
 
     for (const uid of allUids) {
       const authUser = authMap.get(uid);
       const fsData = firestoreMap.get(uid) || {};
+      const userActivity = activityMap[uid] || {};
+      const userPresence = presenceMap[uid];
 
       const claims = authUser?.customClaims || {};
       const customRole = claims.role as string | undefined;
-      const profileRole = (fsData.role as string) || 'patient';
+      const profileRole = (fsData.role as string) || (userActivity.activeRole as string) || 'patient';
       const effectiveRole = customRole || profileRole || 'patient';
 
       if (filterRole !== 'all' && effectiveRole !== filterRole) {
@@ -140,18 +156,10 @@ export async function GET(req: Request) {
       const createdAtRaw = (fsData.createdAt as string) || authUser?.metadata.creationTime || '';
       const createdEpoch = createdAtRaw ? new Date(createdAtRaw).getTime() : 0;
 
-      // Compute last sign-in timestamp
-      const lastSignInRaw = (fsData.lastLoginAt as string) || authUser?.metadata.lastSignInTime || createdAtRaw || '';
-      const lastSignInEpoch = lastSignInRaw ? new Date(lastSignInRaw).getTime() : createdEpoch;
-
-      // Presence Calculation:
-      // Active if marked isOnline AND lastSeenAt is within 45 seconds (45,000 ms)
-      const lastSeenAtRaw = (fsData.lastSeenAt as string) || lastSignInRaw || '';
-      const lastSeenEpoch = lastSeenAtRaw ? new Date(lastSeenAtRaw).getTime() : 0;
-      const timeSinceLastSeenMs = lastSeenEpoch > 0 ? Math.max(0, nowEpoch - lastSeenEpoch) : Infinity;
-
-      const isRecordedOnline = Boolean(fsData.isOnline);
-      const isOnline = isRecordedOnline && timeSinceLastSeenMs <= 45000;
+      // Realtime Presence Calculation:
+      // A user is online if and only if they have at least 1 active connection socket in RTDB
+      const activeConnectionsCount = userPresence && typeof userPresence === 'object' ? Object.keys(userPresence).length : 0;
+      const isOnline = activeConnectionsCount > 0;
 
       if (filterPresence === 'online_only' && !isOnline) {
         continue;
@@ -160,28 +168,31 @@ export async function GET(req: Request) {
         continue;
       }
 
-      // Session Start & End Window:
-      const sessionStartedAtRaw = (fsData.sessionStartedAt as string) || (isOnline ? lastSeenAtRaw : null);
-      const sessionStartedEpoch = sessionStartedAtRaw ? new Date(sessionStartedAtRaw).getTime() : 0;
+      // Authoritative Timestamps from RTDB / Auth
+      const lastLoginAtRaw = (userActivity.lastLoginAt as string) || authUser?.metadata.lastSignInTime || (fsData.lastLoginAt as string) || createdAtRaw || '';
+      const lastLoginEpoch = lastLoginAtRaw ? new Date(lastLoginAtRaw).getTime() : createdEpoch;
 
-      const lastSessionEndedAtRaw = (fsData.lastSessionEndedAt as string) || (!isOnline && lastSeenAtRaw ? lastSeenAtRaw : null);
-      const lastSessionEndedEpoch = lastSessionEndedAtRaw ? new Date(lastSessionEndedAtRaw).getTime() : 0;
+      const lastLogoutAtRaw = (userActivity.lastLogoutAt as string) || (fsData.lastSessionEndedAt as string) || null;
+      const lastActivityAtRaw = (userActivity.lastActivityAt as string) || lastLoginAtRaw || null;
+      const lastActivityEpoch = lastActivityAtRaw ? new Date(lastActivityAtRaw).getTime() : lastLoginEpoch;
 
-      // Current / Last Session Duration:
+      const lastLogoutReason = (userActivity.lastLogoutReason as string) || (isOnline ? null : 'connection_lost');
+
+      // Cumulative Duration Calculation:
+      const baseTotalSec = typeof userActivity.totalTimeSpentSeconds === 'number'
+        ? Math.floor(userActivity.totalTimeSpentSeconds)
+        : (typeof fsData.totalTimeSpentSec === 'number' ? Math.floor(fsData.totalTimeSpentSec) : 0);
+
       let currentSessionSec = 0;
-      if (isOnline && sessionStartedEpoch > 0) {
-        currentSessionSec = Math.max(0, Math.floor((nowEpoch - sessionStartedEpoch) / 1000));
-      } else if (typeof fsData.lastSessionDurationSec === 'number') {
-        currentSessionSec = Math.floor(fsData.lastSessionDurationSec);
-      } else if (sessionStartedEpoch > 0 && lastSessionEndedEpoch >= sessionStartedEpoch) {
-        currentSessionSec = Math.max(0, Math.floor((lastSessionEndedEpoch - sessionStartedEpoch) / 1000));
+      const sessionStartEpoch = typeof userActivity.sessionStartEpoch === 'number'
+        ? userActivity.sessionStartEpoch
+        : lastLoginEpoch;
+
+      if (isOnline && sessionStartEpoch > 0) {
+        currentSessionSec = Math.max(0, Math.floor((nowEpoch - sessionStartEpoch) / 1000));
       }
 
-      // Cumulative Total Time in Role:
-      const baseTotalSec = typeof fsData.totalTimeSpentSec === 'number' ? Math.floor(fsData.totalTimeSpentSec) : 0;
-      const totalTimeSpentSec = isOnline ? baseTotalSec + currentSessionSec : baseTotalSec;
-
-      const lastInteractionType = (fsData.lastInteractionType as string) || (isOnline ? 'active' : 'idle');
+      const totalTimeSpentSec = baseTotalSec + currentSessionSec;
 
       records.push({
         uid,
@@ -189,40 +200,39 @@ export async function GET(req: Request) {
         email: (fsData.email as string) || authUser?.email || 'N/A',
         role: effectiveRole,
         isOnline,
-        timeSinceLastSeenMs,
-        lastInteractionType,
-        sessionStartedAt: sessionStartedAtRaw ? new Date(sessionStartedAtRaw).toISOString() : null,
-        sessionEndedAt: isOnline ? null : (lastSessionEndedAtRaw ? new Date(lastSessionEndedAtRaw).toISOString() : null),
+        activeConnectionsCount,
+        lastLogoutReason,
+        lastLoginAt: lastLoginAtRaw ? new Date(lastLoginAtRaw).toISOString() : null,
+        lastLoginEpoch,
+        lastLogoutAt: lastLogoutAtRaw ? new Date(lastLogoutAtRaw).toISOString() : null,
+        lastActivityAt: lastActivityAtRaw ? new Date(lastActivityAtRaw).toISOString() : null,
+        lastActivityEpoch,
         currentSessionSec,
         currentSessionFormatted: formatDuration(currentSessionSec),
         totalTimeSpentSec,
         totalTimeSpentFormatted: formatDuration(totalTimeSpentSec),
         createdAt: createdAtRaw ? new Date(createdAtRaw).toISOString() : null,
         createdEpoch,
-        lastSignInAt: lastSignInRaw ? new Date(lastSignInRaw).toISOString() : null,
-        lastSignInEpoch,
-        lastSeenAt: lastSeenAtRaw ? new Date(lastSeenAtRaw).toISOString() : null,
-        lastSeenEpoch,
         disabled: Boolean(authUser?.disabled),
       });
     }
 
-    // 4. Sorting
+    // 5. Shortlist Sorting
     if (sortBy === 'signup') {
       records.sort((a, b) => b.createdEpoch - a.createdEpoch);
     } else if (sortBy === 'online_first') {
       records.sort((a, b) => {
-        if (a.isOnline === b.isOnline) return b.lastSeenEpoch - a.lastSeenEpoch;
+        if (a.isOnline === b.isOnline) return b.lastActivityEpoch - a.lastActivityEpoch;
         return a.isOnline ? -1 : 1;
       });
     } else if (sortBy === 'total_time') {
       records.sort((a, b) => b.totalTimeSpentSec - a.totalTimeSpentSec);
     } else {
-      // Default: last_signin
-      records.sort((a, b) => b.lastSignInEpoch - a.lastSignInEpoch);
+      // Default: latest login
+      records.sort((a, b) => b.lastLoginEpoch - a.lastLoginEpoch);
     }
 
-    // 5. Render HTML view if requested
+    // 6. Standalone HTML view formatting
     if (format === 'html') {
       const htmlTableRows = records
         .map((u, idx) => {
@@ -247,23 +257,22 @@ export async function GET(req: Request) {
             return `<div style="font-weight:600; color:#1e293b;">${d.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: '2-digit' })}</div><div style="color:#64748b; font-size:11px;">${d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</div>`;
           };
 
-          // Session Time Window ("from how much time to how much time they are online")
+          // Session Time Window
           let timeWindowHtml = '';
           if (u.isOnline) {
-            const startStr = u.sessionStartedAt ? formatTimeOnly(u.sessionStartedAt) : 'Session Active';
             timeWindowHtml = `
-              <div style="font-weight:700; color:#15803d; font-size:12px;">From ${startStr} &rarr; Active Now</div>
-              <div style="color:#16a34a; font-size:11px; font-weight:600;">Scrolling / Active (${u.currentSessionFormatted})</div>
+              <div style="font-weight:700; color:#15803d; font-size:12px;">From ${formatTimeOnly(u.lastLoginAt)} &rarr; Active Now</div>
+              <div style="color:#16a34a; font-size:11px; font-weight:600;">Active Session (${u.currentSessionFormatted})</div>
             `;
-          } else if (u.sessionStartedAt && u.sessionEndedAt) {
+          } else if (u.lastLoginAt && u.lastLogoutAt) {
             timeWindowHtml = `
-              <div style="font-weight:600; color:#475569; font-size:12px;">${formatTimeOnly(u.sessionStartedAt)} &rarr; ${formatTimeOnly(u.sessionEndedAt)}</div>
-              <div style="color:#64748b; font-size:11px;">Duration: ${u.currentSessionFormatted}</div>
+              <div style="font-weight:600; color:#475569; font-size:12px;">${formatTimeOnly(u.lastLoginAt)} &rarr; ${formatTimeOnly(u.lastLogoutAt)}</div>
+              <div style="color:#64748b; font-size:11px; text-transform:capitalize;">Ended: ${u.lastLogoutReason ? u.lastLogoutReason.replace('_', ' ') : 'Offline'}</div>
             `;
           } else {
             timeWindowHtml = `
-              <div style="color:#94a3b8; font-size:12px; font-style:italic;">No recorded session</div>
-              <div style="color:#94a3b8; font-size:11px;">${u.lastSeenAt ? 'Last seen ' + formatTimeOnly(u.lastSeenAt) : ''}</div>
+              <div style="color:#94a3b8; font-size:12px; font-style:italic;">Offline</div>
+              <div style="color:#94a3b8; font-size:11px;">${u.lastActivityAt ? 'Last seen ' + formatTimeOnly(u.lastActivityAt) : 'No session'}</div>
             `;
           }
 
@@ -271,14 +280,12 @@ export async function GET(req: Request) {
           const presenceBadge = u.isOnline
             ? `<span style="display:inline-flex; align-items:center; gap:6px; padding:4px 10px; border-radius:9999px; font-size:11px; font-weight:700; background:#dcfce7; color:#15803d; border:1px solid #86efac;">
                 <span style="display:inline-block; width:8px; height:8px; border-radius:50%; background:#22c55e; box-shadow:0 0 8px #22c55e;"></span>
-                ONLINE
-               </span>
-               <div style="font-size:10px; color:#16a34a; margin-top:3px; text-transform:capitalize;">${escapeHtml(u.lastInteractionType)}</div>`
+                ONLINE (${u.activeConnectionsCount} ${u.activeConnectionsCount > 1 ? 'tabs' : 'tab'})
+               </span>`
             : `<span style="display:inline-flex; align-items:center; gap:6px; padding:4px 10px; border-radius:9999px; font-size:11px; font-weight:700; background:#f1f5f9; color:#64748b; border:1px solid #cbd5e1;">
                 <span style="display:inline-block; width:8px; height:8px; border-radius:50%; background:#94a3b8;"></span>
                 OFFLINE
-               </span>
-               <div style="font-size:10px; color:#94a3b8; margin-top:3px;">${u.lastSeenAt ? 'Last: ' + formatTimeOnly(u.lastSeenAt) : 'Never seen'}</div>`;
+               </span>`;
 
           return `
           <tr style="border-bottom: 1px solid #e2e8f0; ${idx % 2 === 1 ? 'background-color: #f8fafc;' : ''}">
@@ -292,17 +299,17 @@ export async function GET(req: Request) {
                 ${u.role}
               </span>
             </td>
-            <td style="padding: 12px 16px; min-width: 130px;">
+            <td style="padding: 12px 16px; min-width: 140px;">
               ${presenceBadge}
             </td>
-            <td style="padding: 12px 16px; min-width: 170px;">
+            <td style="padding: 12px 16px; min-width: 180px;">
               ${timeWindowHtml}
             </td>
             <td style="padding: 12px 16px; font-size: 13px; font-weight: 700; color: #0f172a;">
               ${u.totalTimeSpentFormatted}
             </td>
             <td style="padding: 12px 16px; font-size: 12px;">
-              ${formatDt(u.lastSignInAt)}
+              ${formatDt(u.lastLoginAt)}
             </td>
             <td style="padding: 12px 16px; font-size: 12px;">
               ${formatDt(u.createdAt)}
@@ -359,8 +366,8 @@ export async function GET(req: Request) {
   <div class="container">
     <div class="header">
       <div class="title">
-        <h1>User Presence & Role Activity Log (Backend HTML View)</h1>
-        <p>Real-time presence tracking, scroll & interaction monitor, and session time accounting &bull; Admin Authorized</p>
+        <h1>User Presence & Role Activity Log (Firebase RTDB Backend)</h1>
+        <p>Realtime Database Multi-Tab Presence &bull; 60s Refresh Cycle &bull; Zero Firestore Document Quotas</p>
       </div>
       <div class="stats-bar">
         <span class="badge badge-online">&bull; ${onlineCount} Online</span>
@@ -383,11 +390,9 @@ export async function GET(req: Request) {
         <a href="${buildUrl({ presence: 'offline_only' })}" class="btn ${filterPresence === 'offline_only' ? 'btn-active' : ''}">Offline Only</a>
       </div>
       <div style="display: flex; gap: 8px; align-items: center;">
-        <label style="font-size: 12px; color: #64748b; display: flex; align-items: center; gap: 4px; cursor: pointer;">
-          <input type="checkbox" id="autoRefreshToggle" checked onchange="toggleAutoRefresh(this.checked)" /> Auto-Refresh (10s)
-        </label>
+        <span style="font-size: 11px; color: #64748b;" id="refreshCountdown">Auto-Refresh: 60s</span>
         <button onclick="window.print()" class="btn">Print PDF</button>
-        <button onclick="window.location.reload()" class="btn">Refresh Now</button>
+        <button onclick="window.location.reload()" class="btn">Manual Refresh</button>
       </div>
     </div>
 
@@ -399,7 +404,7 @@ export async function GET(req: Request) {
             <th>Email</th>
             <th>Role</th>
             <th>Current Status</th>
-            <th>Active Time Window (From - To)</th>
+            <th>Active Time Window</th>
             <th>Total Time in Role</th>
             <th>Last Sign-In</th>
             <th>Account Created</th>
@@ -413,23 +418,24 @@ export async function GET(req: Request) {
 
     <div class="footer">
       <div>Generated at ${new Date().toLocaleString()} &bull; MEDICORE-AI Admin Kernel</div>
-      <div>Real-Time Presence Tracker &bull; Confidential Healthcare Audit</div>
+      <div>Real-Time Activity Monitor &bull; Zero Quota Footprint</div>
     </div>
   </div>
 
   <script>
-    let refreshTimer = setInterval(() => {
-      window.location.reload();
-    }, 10000);
-
-    function toggleAutoRefresh(enabled) {
-      if (enabled) {
-        if (!refreshTimer) refreshTimer = setInterval(() => window.location.reload(), 10000);
-      } else {
-        clearInterval(refreshTimer);
-        refreshTimer = null;
+    // Exact 60-second automatic refresh (pauses when tab is hidden)
+    let secondsLeft = 60;
+    const label = document.getElementById('refreshCountdown');
+    
+    const countdownTimer = setInterval(() => {
+      if (document.visibilityState === 'visible') {
+        secondsLeft--;
+        if (label) label.textContent = 'Auto-Refresh: ' + secondsLeft + 's';
+        if (secondsLeft <= 0) {
+          window.location.reload();
+        }
       }
-    }
+    }, 1000);
   </script>
 </body>
 </html>`;
