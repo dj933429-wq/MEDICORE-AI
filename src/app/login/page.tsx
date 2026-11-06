@@ -25,8 +25,18 @@ export default function LoginPage() {
   const { user, loading } = useAuth();
 
   useEffect(() => {
+    // If arriving because session expired, do not auto-redirect to dashboard
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      if (params.get('reason') === 'session_expired') {
+        return;
+      }
+    }
+
     if (!loading && user) {
-      if (user.role === 'doctor') {
+      if (user.role === 'admin') {
+        router.replace('/dashboard');
+      } else if (user.role === 'doctor') {
         router.replace('/dashboard/doctor');
       } else if (user.role === 'pharmacist') {
         router.replace('/dashboard/pharmacist');
@@ -34,7 +44,7 @@ export default function LoginPage() {
         router.replace('/dashboard/blood-bank');
       } else if (user.role === 'patient') {
         router.replace('/dashboard/patient');
-      } else {
+      } else if (user.role) {
         router.replace('/dashboard');
       }
     }
@@ -51,21 +61,37 @@ export default function LoginPage() {
     
     try {
       const firebaseUser = await login(email, password);
+      // Authoritatively resolve user role prioritizing refreshed Custom Claims
+      let resolvedRole: string | null = null;
       try {
-        const userSnap = await getDoc(doc(db, 'users', firebaseUser.uid));
-        const role = userSnap.exists() ? userSnap.data()?.role : 'patient';
-        if (role === 'doctor') {
-          router.replace('/dashboard/doctor');
-        } else if (role === 'pharmacist') {
-          router.replace('/dashboard/pharmacist');
-        } else if (role === 'blood_bank') {
-          router.replace('/dashboard/blood-bank');
-        } else if (role === 'patient') {
-          router.replace('/dashboard/patient');
-        } else {
-          router.replace('/dashboard');
-        }
+        const tokenResult = await firebaseUser.getIdTokenResult(true);
+        resolvedRole = (tokenResult.claims.role as string) || null;
       } catch {
+        // ignore
+      }
+
+      if (!resolvedRole) {
+        try {
+          const userSnap = await getDoc(doc(db, 'users', firebaseUser.uid));
+          if (userSnap.exists() && userSnap.data()?.role) {
+            resolvedRole = userSnap.data().role;
+          }
+        } catch {
+          // ignore
+        }
+      }
+
+      if (resolvedRole === 'admin') {
+        router.replace('/dashboard');
+      } else if (resolvedRole === 'doctor') {
+        router.replace('/dashboard/doctor');
+      } else if (resolvedRole === 'pharmacist') {
+        router.replace('/dashboard/pharmacist');
+      } else if (resolvedRole === 'blood_bank') {
+        router.replace('/dashboard/blood-bank');
+      } else if (resolvedRole === 'patient') {
+        router.replace('/dashboard/patient');
+      } else {
         router.replace('/dashboard');
       }
     } catch (err: unknown) {

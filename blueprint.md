@@ -475,7 +475,94 @@ Tested and confirmed 8 genuine issues identified during live QA testing of `http
   - `npm run build`: Production build cleanly compiled across all 22 static and dynamic routes.
   - `npm run test:admin`: 13/13 passing.
   - `npm run test:cycle`: 46/46 passing.
-  - `tests/rtdb-presence-activity.test.mjs`: 8/8 comprehensive integration assertions passing against live RTDB.
+  - `tests/rtdb-presence-activity.test.mjs`: 23/23 comprehensive integration assertions passing against live RTDB.
+
+---
+
+### Completed: Phase 3.1 — RTDB Spark-Compatible Race Remediation & Registration Hardening
+- **Generation Guard & Disconnect Inversion:** Introduced `connectionGeneration` counter and 2-phase reservation flow (`reserve_connection` + `activate_connection`). Client registers `onDisconnect().remove()` prior to presence creation.
+
+---
+
+### Completed: Phase 3.5 — Strict Connection Generation Validation & Tri-State Presence Semantics
+- **Fix 1: Strict Connection Generation Validation (`src/lib/rtdbSession.ts`):**
+  - Authoritative generation established in Phase A is recorded immutably in `current.pendingActivations[connectionKey].connectionGeneration`.
+  - Phase B writes `connectionGeneration: newGeneration` into the actual RTDB presence record under `/presence/{uid}/{connectionKey}`.
+  - Phase C registers the exact authoritative generation in `/activity/{uid}/verifiedConnections/{connectionKey}`.
+  - `validateUserPresence()` enforces strict generation validation:
+    1. Presence record `connectionGeneration` must be a valid positive integer.
+    2. Registry entry `connectionGeneration` must be a valid positive integer.
+    3. Presence generation must strictly equal registry generation.
+    4. Registry generation must not exceed `activity.connectionGeneration` or precede `activity.sessionStartGeneration`.
+  - Multi-tab and multi-device sessions are preserved: older valid tabs in the same session remain valid because their generation satisfies `sessionStartGeneration <= regGen <= connectionGeneration`.
+- **Fix 2: Separation of Pending Activation from Confirmed Online (`src/lib/rtdbSession.ts`, `src/app/api/admin/user-log/route.ts`, `src/app/admin/user-log/page.tsx`):**
+  - `isOnline` strictly requires at least 1 verified connection and online activity status.
+  - Introduced explicit `presenceStatus: 'online' | 'pending' | 'offline'`.
+  - Admin API returns `presenceStatus` and preserves reconciliation protections against in-flight activations via `hasPendingActivation`.
+  - Admin UI displays `PENDING` (with amber badge and "connecting...") when an active lease exists without confirmed presence; never fabricates an active tab count.
+  - HTML fallback view renders `PENDING (connecting...)` for pending-only records.
+- **Verification & Zero-Regression Certification:**
+  - `tests/rtdb-pending-activation.test.mjs`: **51/51 PASSED** (All 12 focused regression tests for generation and status semantics passing).
+  - `tests/rtdb-emulator.test.mjs`: **8/8 PASSED** against local RTDB emulator.
+  - `npm run test:admin`: **13/13 PASSED**.
+  - `npm run test:cycle`: **46/46 PASSED**.
+  - `npx tsc --noEmit`: **0 errors**.
+  - `npm run lint`: **0 errors**.
+  - `npm run build`: **22/22 routes cleanly compiled**.
+- **Vercel Production Deployment:**
+  - Production URL: `https://medicore-ai-gules.vercel.app`
+  - Deployment ID: `dpl_2WGULAG2uccFQRYarQ8WrCFhgV7Y`
+  - Verified live serving HTTP 200 with full SSR/Client hydration.
+  - Spark Free tier ($0/month) strictly preserved with environment variables `NEXT_PUBLIC_FIREBASE_DATABASE_URL` and `FIREBASE_DATABASE_URL` configured on Vercel.
+
+---
+
+### Completed: Phase 3.6 — Multi-Layer Session Inactivity Timeout Remediation across Browser Restarts & Inactivity
+- **Problem Remediation:**
+  - Users returning after prolonged inactivity (> 10 minutes) or next-day browser restarts remained logged in due to persistent Firebase Auth IndexedDB tokens and missing last-activity verification during auth restoration.
+  - In `SessionTimeoutManager.tsx`, a race condition allowed `recordActivity()` to immediately overwrite an expired `medicore_last_activity` timestamp before `triggerInactivityLogout()` could finalize, causing sessions to remain active.
+  - In `LoginPage.tsx`, automatic role-based redirect inadvertently bounced expired sessions back to dashboard routes before sign-out could complete.
+- **Architectural Enhancements:**
+  1. **Auth Restoration Gate (`src/lib/auth.js`):** On Firebase Auth `onAuthStateChanged`, inspects `localStorage` last-activity timestamp and token `auth_time`. If elapsed time exceeds `INACTIVITY_TIMEOUT_MS` (600,000 ms / 10 minutes), immediately forces `firebaseSignOut(auth)`, clears storage, and redirects to `/login?reason=session_expired` without mounting dashboard views.
+  2. **Timestamp Seeding (`src/lib/auth.js`):** `login()` and `signup()` proactively seed `medicore_last_activity` in `localStorage` upon credential authentication.
+  3. **Inactivity Lock & Hard Navigation (`src/components/SessionTimeoutManager.tsx`):** `recordActivity()` strictly respects `isLoggingOutRef` to prevent overwriting expired timestamps. `checkInactivity()` returns boolean status to gate event handlers, and `triggerInactivityLogout()` uses clean full-page navigation to `/login?reason=session_expired`.
+  4. **Auto-Redirect Prevention (`src/app/login/page.tsx`):** If URL query param `reason=session_expired` is present, disables auto-redirecting to dashboard, displaying the session expiration security notice.
+- **Verification & Safeguards:**
+  - Preserved 600,000 ms (10-minute) inactivity timeout requirement.
+  - Preserved Spark Free compatibility ($0/month).
+  - Preserved Blood Bank, Menstrual Cycle, and Admin Role systems intact.
+
+---
+
+### Completed: Phase 3.8 — Final Independent Verification & Multi-Tab / Multi-Session Logout Safety
+- **Git & Security Audit:**
+  - Verified active branch `feature/rtdb-activity-monitoring` and HEAD `c32bf8993c21c11628cf2529c6a3120a4cd3f8ae`.
+  - Audited `database.rules.json` and `firebase.json`: verified client write restrictions (`!newData.exists()`) limiting client socket access to deletions on disconnect; server Admin SDK handles writes.
+  - Zero unapproved commits, zero pushes, and zero production rule deployments.
+- **Multi-Tab & Multi-Session Logout Hardening:**
+  - Updated `/api/presence/session/route.ts` with session-fenced presence and registry removal.
+  - When `connectionKey` or `targetSessionId` is supplied, cleanup only removes nodes matching `record.sessionId === targetSessionId`. Other concurrent sessions (e.g., Session B on another device/browser) remain completely untouched and online.
+  - `finalizeUserSessionAtomic` checks Concurrency Guard C (`targetSessionId === current.activeSessionId`), preventing an older or separate session's logout from terminating a newer or distinct active session.
+  - Single-tab closing safely removes only that connection key via client socket disconnect or teardown, leaving remaining tabs for that session online.
+  - In `src/lib/auth.js` and `SessionTimeoutManager.tsx`, tab metadata (`connectionKey` and `sessionId`) is extracted from `sessionStorage` and passed in logout/timeout payloads for precise fencing.
+- **Heartbeat Interval & Inactivity Timeout Independence:**
+  - Verified 60-second heartbeat interval in `PresenceTracker.tsx` and 120-second stale detection threshold in `validateUserPresence()`. Temporary network delays up to 120s do not drop active tabs.
+  - Verified that the 600,000 ms (10-minute) inactivity timeout in `SessionTimeoutManager.tsx` and `AuthProvider` remains 100% independent of connection heartbeats.
+- **Comprehensive Verification Results:**
+  - `tests/auth-presence-remediation.test.mjs`: **15/15 PASSED** (including multi-tab survival, all-tabs reconciliation, and session-fenced logout isolation).
+  - `tests/rtdb-pending-activation.test.mjs`: **51/51 PASSED**.
+  - `tests/rtdb-emulator.test.mjs`: **8/8 PASSED** against native Firebase RTDB emulator.
+  - `npm run test:admin`: **13/13 PASSED**.
+  - `npm run test:cycle`: **46/46 PASSED**.
+  - `npx tsc --noEmit`: **0 errors**.
+  - `npm run lint`: **0 errors** (0 errors, 6 benign warnings).
+  - `npm run build`: **22/22 routes cleanly compiled** (production Next.js 16 build passed).
+
+
+
+
+
+
 
 
 

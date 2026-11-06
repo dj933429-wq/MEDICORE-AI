@@ -11,6 +11,9 @@ import { doc, setDoc, getDoc } from 'firebase/firestore';
 /** @type {import('react').Context<{user: any, loading: boolean}>} */
 const AuthContext = createContext({ user: null, loading: true });
 
+const INACTIVITY_STORAGE_KEY = 'medicore_last_activity';
+const INACTIVITY_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes in milliseconds
+
 export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -19,6 +22,44 @@ export const AuthProvider = ({ children }) => {
     // Observable hook binding directly to Firebase Authentication
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
       if (firebaseUser) {
+        // Enforce 10-minute inactivity timeout on auth restoration across browser restarts/idle periods
+        if (typeof window !== 'undefined') {
+          const now = Date.now();
+          const storedActivity = localStorage.getItem(INACTIVITY_STORAGE_KEY);
+          let isExpired = false;
+
+          if (storedActivity) {
+            const lastActivity = Number(storedActivity);
+            if (Number.isFinite(lastActivity) && (now - lastActivity >= INACTIVITY_TIMEOUT_MS)) {
+              isExpired = true;
+            }
+          } else {
+            // If stored activity timestamp is absent, inspect the token auth_time
+            try {
+              const tokenResult = await firebaseUser.getIdTokenResult();
+              const authTimeEpoch = tokenResult.claims.auth_time ? tokenResult.claims.auth_time * 1000 : 0;
+              if (authTimeEpoch > 0 && (now - authTimeEpoch >= INACTIVITY_TIMEOUT_MS)) {
+                isExpired = true;
+              }
+            } catch {
+              // ignore token inspection errors
+            }
+          }
+
+          if (isExpired) {
+            try {
+              localStorage.removeItem(INACTIVITY_STORAGE_KEY);
+            } catch {}
+            await firebaseSignOut(auth);
+            setUser(null);
+            setLoading(false);
+            if (!window.location.pathname.startsWith('/login')) {
+              window.location.href = '/login?reason=session_expired';
+            }
+            return;
+          }
+        }
+
         setLoading(true);
         try {
           // Fetch the user's role from their /users/{uid} document
@@ -28,13 +69,17 @@ export const AuthProvider = ({ children }) => {
           let userData = {};
           let role = 'patient';
 
-          // Also check custom claims if present
+          // Authoritatively resolve custom claims first (force-refreshing token)
           let customRole = null;
           try {
-            const tokenResult = await firebaseUser.getIdTokenResult();
+            const tokenResult = await firebaseUser.getIdTokenResult(true);
             customRole = tokenResult.claims.role || null;
           } catch {
-            // ignore
+            // fallback to cached claims if offline
+            try {
+              const cachedTokenResult = await firebaseUser.getIdTokenResult();
+              customRole = cachedTokenResult.claims.role || null;
+            } catch {}
           }
 
           if (docSnap.exists()) {
@@ -60,10 +105,13 @@ export const AuthProvider = ({ children }) => {
               createdAt: new Date().toISOString()
             };
             
-            try {
-              await setDoc(docRef, userData);
-            } catch (err) {
-              console.error("Failed to automatically create missing user profile:", err);
+            // Only auto-create profile if NOT admin (never overwrite admin profile)
+            if (role !== 'admin') {
+              try {
+                await setDoc(docRef, userData);
+              } catch (err) {
+                console.error("Failed to automatically create missing user profile:", err);
+              }
             }
             
             setUser({ 
@@ -77,8 +125,8 @@ export const AuthProvider = ({ children }) => {
             });
           }
 
-          // **AUTO-CREATE PATIENT PROFILE & PHARMACY LOOKUP LOGIC (Strictly Patients only)**
-          if (role === 'patient') {
+          // **AUTO-CREATE PATIENT PROFILE & PHARMACY LOOKUP LOGIC (Strictly Patients only, never Admin)**
+          if (role === 'patient' && customRole !== 'admin') {
             try {
               const patientRef = doc(db, 'patients', firebaseUser.uid);
               const patientSnap = await getDoc(patientRef);
@@ -130,9 +178,14 @@ export const AuthProvider = ({ children }) => {
 
         } catch (error) {
           console.error("Error fetching user profile details:", error);
+          let errFallbackRole = null;
+          try {
+            const tokenResult = await firebaseUser.getIdTokenResult();
+            errFallbackRole = tokenResult.claims.role || null;
+          } catch {}
           setUser({ 
             ...firebaseUser, 
-            role: 'patient',
+            role: errFallbackRole || 'patient',
             getIdToken: (forceRefresh) => firebaseUser.getIdToken(forceRefresh),
             getIdTokenResult: (forceRefresh) => firebaseUser.getIdTokenResult(forceRefresh)
           }); 
@@ -219,11 +272,22 @@ export const signup = async (email, password, name, role, gender) => {
     }
   }
 
+  if (typeof window !== 'undefined') {
+    try {
+      localStorage.setItem(INACTIVITY_STORAGE_KEY, String(Date.now()));
+    } catch {}
+  }
+
   return user;
 };
 
 export const login = async (email, password) => {
   const userCredential = await signInWithEmailAndPassword(auth, email, password);
+  if (typeof window !== 'undefined') {
+    try {
+      localStorage.setItem(INACTIVITY_STORAGE_KEY, String(Date.now()));
+    } catch {}
+  }
   try {
     const userDocRef = doc(db, 'users', userCredential.user.uid);
     await setDoc(userDocRef, { 
@@ -232,10 +296,36 @@ export const login = async (email, password) => {
   } catch (err) {
     console.warn("Could not update lastLoginAt on login:", err);
   }
+  try {
+    const token = await userCredential.user.getIdToken();
+    if (token) {
+      await fetch('/api/presence/session', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ action: 'login' }),
+      }).catch(() => {});
+    }
+  } catch {
+    // Non-critical presence initialization
+  }
   return userCredential.user;
 };
 
 export const logout = async () => {
+  let tabInfo = null;
+  if (typeof window !== 'undefined') {
+    try {
+      localStorage.removeItem(INACTIVITY_STORAGE_KEY);
+      const rawTab = sessionStorage.getItem('medicore_presence_tab');
+      if (rawTab) {
+        tabInfo = JSON.parse(rawTab);
+      }
+      sessionStorage.removeItem('medicore_presence_tab');
+    } catch {}
+  }
   try {
     if (auth.currentUser) {
       const token = await auth.currentUser.getIdToken().catch(() => '');
@@ -246,7 +336,12 @@ export const logout = async () => {
             'Content-Type': 'application/json',
             Authorization: `Bearer ${token}`,
           },
-          body: JSON.stringify({ action: 'logout', reason: 'explicit_logout' }),
+          body: JSON.stringify({
+            action: 'logout',
+            reason: 'explicit_logout',
+            connectionKey: tabInfo?.connectionKey,
+            sessionId: tabInfo?.sessionId,
+          }),
         }).catch(() => {});
       }
     }

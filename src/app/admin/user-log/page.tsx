@@ -10,6 +10,7 @@ interface UserLogRecord {
   email: string;
   role: 'admin' | 'doctor' | 'pharmacist' | 'blood_bank' | 'patient';
   isOnline: boolean;
+  presenceStatus?: 'online' | 'pending' | 'offline';
   activeConnectionsCount: number;
   lastLogoutReason: string | null;
   lastLoginAt: string | null;
@@ -507,14 +508,24 @@ export default function UserLogPage() {
 
                         {/* Presence Status */}
                         <td className="py-3.5 px-4">
-                          {item.isOnline ? (
+                          {item.presenceStatus === 'online' || (item.isOnline && item.activeConnectionsCount > 0) ? (
                             <div className="space-y-1">
                               <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">
                                 <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
                                 ONLINE
                               </span>
                               <div className="text-[10px] text-emerald-500/80 font-mono">
-                                {item.activeConnectionsCount > 1 ? `${item.activeConnectionsCount} active tabs` : '1 active tab'}
+                                {item.activeConnectionsCount === 1 ? '1 active tab' : `${item.activeConnectionsCount} active tabs`}
+                              </div>
+                            </div>
+                          ) : item.presenceStatus === 'pending' ? (
+                            <div className="space-y-1">
+                              <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-amber-500/10 text-amber-400 border border-amber-500/30">
+                                <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse" />
+                                PENDING
+                              </span>
+                              <div className="text-[10px] text-amber-500/80 font-mono">
+                                connecting...
                               </div>
                             </div>
                           ) : (

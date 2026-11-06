@@ -2,6 +2,9 @@
   "database": {
     "rules": "database.rules.json"
   },
+  "functions": {
+    "source": "functions"
+  },
   "firestore": {
     "database": "(default)",
     "location": "asia-south1",

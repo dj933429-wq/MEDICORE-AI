@@ -5,24 +5,49 @@ import { useAuth } from '@/lib/auth';
 import { rtdb } from '@/lib/firebase';
 import { ref, onDisconnect, remove } from 'firebase/database';
 
+const TAB_STORAGE_KEY = 'medicore_presence_tab';
+
 export default function PresenceTracker() {
   const { user } = useAuth();
   const connectionKeyRef = useRef<string | null>(null);
+  const sessionIdRef = useRef<string | null>(null);
   const lastActivityReportRef = useRef<number>(0);
   const isConnectingRef = useRef<boolean>(false);
+  const inFlightKeyRef = useRef<string | null>(null);
 
   useEffect(() => {
     if (!user || !user.uid) {
+      if (typeof window !== 'undefined') {
+        try {
+          sessionStorage.removeItem(TAB_STORAGE_KEY);
+        } catch {}
+      }
       connectionKeyRef.current = null;
+      sessionIdRef.current = null;
+      inFlightKeyRef.current = null;
       return;
     }
 
     const uid = user.uid;
     let isSubscribed = true;
 
+    // Check if this specific browser tab has a previous connection from page reload
+    let previousConnectionKey: string | null = null;
+    if (typeof window !== 'undefined') {
+      try {
+        const stored = sessionStorage.getItem(TAB_STORAGE_KEY);
+        if (stored) {
+          const parsed = JSON.parse(stored);
+          if (parsed && typeof parsed.connectionKey === 'string') {
+            previousConnectionKey = parsed.connectionKey;
+          }
+        }
+      } catch {}
+    }
+
     // Helper: call backend presence session endpoint
     const callPresenceApi = async (
-      action: 'login' | 'activity' | 'heartbeat' | 'logout',
+      action: 'connect' | 'reserve_connection' | 'activate_connection' | 'activity' | 'heartbeat' | 'logout',
       extra: Record<string, unknown> = {}
     ) => {
       try {
@@ -38,6 +63,7 @@ export default function PresenceTracker() {
           body: JSON.stringify({
             action,
             connectionKey: connectionKeyRef.current,
+            sessionId: sessionIdRef.current,
             ...extra,
           }),
         });
@@ -49,25 +75,74 @@ export default function PresenceTracker() {
       }
     };
 
-    // 1. Establish initial trusted presence session
+    // 1. Establish trusted presence connection via 2-phase handshake:
+    // Phase 1: Reserve connection key & session ID on server without creating presence node
+    // Phase 2: Client registers onDisconnect(ref).remove() BEFORE node exists in RTDB
+    // Phase 3: Client activates connection on server; server writes presence record & advances generation
     const initPresenceSession = async () => {
       if (isConnectingRef.current || connectionKeyRef.current) return;
       isConnectingRef.current = true;
 
       try {
-        const result = await callPresenceApi('login');
-        if (!isSubscribed || !result?.connectionKey) return;
+        // Step 1: Reserve connection, passing previousConnectionKey to prune refreshed orphan
+        const reserveResult = await callPresenceApi('reserve_connection', {
+          previousConnectionKey,
+        });
+        if (!isSubscribed || !reserveResult?.connectionKey || !reserveResult?.sessionId) {
+          return;
+        }
 
-        const connKey = result.connectionKey;
+        const connKey = reserveResult.connectionKey;
+        const sessId = reserveResult.sessionId;
+        inFlightKeyRef.current = connKey;
+
+        // Step 2: Register onDisconnect hook BEFORE active presence node is created
+        const clientConnRef = ref(rtdb, `presence/${uid}/${connKey}`);
+        try {
+          await onDisconnect(clientConnRef).remove();
+        } catch (onDisconnectErr) {
+          console.debug('[PresenceTracker] Failed to register onDisconnect hook:', onDisconnectErr);
+          inFlightKeyRef.current = null;
+          return;
+        }
+
+        if (!isSubscribed) {
+          try {
+            await onDisconnect(clientConnRef).cancel();
+            remove(clientConnRef).catch(() => {});
+          } catch {}
+          inFlightKeyRef.current = null;
+          return;
+        }
+
+        // Step 3: Activate presence connection on server
+        const activateResult = await callPresenceApi('activate_connection', {
+          connectionKey: connKey,
+          sessionId: sessId,
+        });
+
+        if (!isSubscribed || !activateResult?.activated) {
+          try {
+            await onDisconnect(clientConnRef).cancel();
+            remove(clientConnRef).catch(() => {});
+          } catch {}
+          inFlightKeyRef.current = null;
+          return;
+        }
+
         connectionKeyRef.current = connKey;
+        sessionIdRef.current = sessId;
+        inFlightKeyRef.current = null;
         lastActivityReportRef.current = Date.now();
 
-        // Attach client-side onDisconnect hook so RTDB drops connection on crash/drop
-        try {
-          const clientConnRef = ref(rtdb, `presence/${uid}/${connKey}`);
-          onDisconnect(clientConnRef).remove();
-        } catch (rtdbErr) {
-          console.debug('[PresenceTracker] RTDB onDisconnect hook:', rtdbErr);
+        // Persist active tab connection in sessionStorage for refresh continuity
+        if (typeof window !== 'undefined') {
+          try {
+            sessionStorage.setItem(
+              TAB_STORAGE_KEY,
+              JSON.stringify({ connectionKey: connKey, sessionId: sessId })
+            );
+          } catch {}
         }
       } finally {
         isConnectingRef.current = false;
@@ -118,19 +193,19 @@ export default function PresenceTracker() {
       });
       document.removeEventListener('visibilitychange', onVisibilityChange);
 
-      // Gracefully terminate this specific connection
-      const activeKey = connectionKeyRef.current;
-      if (activeKey) {
+      // Gracefully terminate this specific connection node (active or in-flight)
+      const keyToClean = connectionKeyRef.current || inFlightKeyRef.current;
+      if (keyToClean) {
         try {
-          const clientConnRef = ref(rtdb, `presence/${uid}/${activeKey}`);
+          const clientConnRef = ref(rtdb, `presence/${uid}/${keyToClean}`);
           remove(clientConnRef).catch(() => {});
-        } catch {
-          // ignore
-        }
+        } catch {}
         connectionKeyRef.current = null;
+        inFlightKeyRef.current = null;
       }
     };
-  }, [user]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.uid]);
 
   return null;
 }

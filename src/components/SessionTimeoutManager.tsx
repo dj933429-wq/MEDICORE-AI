@@ -21,6 +21,7 @@ export default function SessionTimeoutManager() {
 
     // Helper: update activity timestamp (throttled to at most once every 5 seconds)
     const recordActivity = () => {
+      if (isLoggingOutRef.current) return;
       const now = Date.now();
       if (now - lastWriteRef.current >= 5000) {
         lastWriteRef.current = now;
@@ -36,22 +37,32 @@ export default function SessionTimeoutManager() {
     const triggerInactivityLogout = async () => {
       if (isLoggingOutRef.current) return;
       isLoggingOutRef.current = true;
+      let tabInfo: { connectionKey?: string; sessionId?: string } | null = null;
       try {
         localStorage.removeItem(STORAGE_KEY);
+        const rawTab = typeof window !== 'undefined' ? sessionStorage.getItem('medicore_presence_tab') : null;
+        if (rawTab) {
+          tabInfo = JSON.parse(rawTab);
+        }
       } catch {
         // Ignore
       }
 
       try {
-        const token = typeof user?.getIdToken === 'function' ? await user.getIdToken() : '';
+        const token = typeof user?.getIdToken === 'function' ? await user.getIdToken().catch(() => '') : '';
         if (token) {
-          await fetch('/api/presence/session', {
+          fetch('/api/presence/session', {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
               Authorization: `Bearer ${token}`,
             },
-            body: JSON.stringify({ action: 'timeout', reason: 'inactivity_timeout' }),
+            body: JSON.stringify({
+              action: 'timeout',
+              reason: 'inactivity_timeout',
+              connectionKey: tabInfo?.connectionKey,
+              sessionId: tabInfo?.sessionId,
+            }),
           }).catch(() => {});
         }
       } catch {
@@ -64,12 +75,14 @@ export default function SessionTimeoutManager() {
         console.warn('[SessionTimeout] Error during inactivity logout:', err);
       }
 
-      router.replace('/login?reason=session_expired');
+      if (typeof window !== 'undefined') {
+        window.location.href = '/login?reason=session_expired';
+      }
     };
 
     // Helper: inspect whether session has exceeded 10 minutes
-    const checkInactivity = () => {
-      if (isLoggingOutRef.current) return;
+    const checkInactivity = (): boolean => {
+      if (isLoggingOutRef.current) return true;
       try {
         const storedStr = localStorage.getItem(STORAGE_KEY);
         const now = Date.now();
@@ -77,29 +90,38 @@ export default function SessionTimeoutManager() {
         if (!storedStr) {
           // Initialize if missing
           localStorage.setItem(STORAGE_KEY, String(now));
-          return;
+          return false;
         }
 
         const lastActivity = Number(storedStr);
         if (Number.isFinite(lastActivity) && now - lastActivity >= INACTIVITY_TIMEOUT_MS) {
           triggerInactivityLogout();
+          return true;
         }
       } catch {
         // Fallback if localStorage disabled
       }
+      return false;
     };
 
     // 1. Check immediately on mount (in case user reloaded after being idle for 1-2 hours)
-    checkInactivity();
-    recordActivity();
+    const initialExpired = checkInactivity();
+    if (!initialExpired) {
+      recordActivity();
+    }
 
     // 2. Periodic interval check every 5 seconds
-    const intervalId = setInterval(checkInactivity, 5000);
+    const intervalId = setInterval(() => {
+      checkInactivity();
+    }, 5000);
 
     // 3. User interaction listeners across the window
     const onUserAction = () => {
-      checkInactivity();
-      recordActivity();
+      if (isLoggingOutRef.current) return;
+      const expired = checkInactivity();
+      if (!expired) {
+        recordActivity();
+      }
     };
 
     const events = ['mousemove', 'mousedown', 'keydown', 'scroll', 'touchstart', 'click'];

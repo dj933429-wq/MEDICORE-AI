@@ -1,5 +1,9 @@
 import { NextResponse } from 'next/server';
 import { adminAuth, adminRtdb, adminDb } from '@/lib/firebaseAdmin';
+import {
+  finalizeUserSessionAtomic,
+  validateUserPresence,
+} from '@/lib/rtdbSession';
 
 /**
  * Verify caller has Administrator privileges (via Custom Claim or verified Firestore role)
@@ -156,10 +160,30 @@ export async function GET(req: Request) {
       const createdAtRaw = (fsData.createdAt as string) || authUser?.metadata.creationTime || '';
       const createdEpoch = createdAtRaw ? new Date(createdAtRaw).getTime() : 0;
 
-      // Realtime Presence Calculation:
-      // A user is online if and only if they have at least 1 active connection socket in RTDB
-      const activeConnectionsCount = userPresence && typeof userPresence === 'object' ? Object.keys(userPresence).length : 0;
-      const isOnline = activeConnectionsCount > 0;
+      // Realtime Presence Validation:
+      // Validates connections against active session and generation; eliminates raw Object.keys trust
+      const presenceValidation = validateUserPresence(userPresence, userActivity, nowEpoch);
+      const activeConnectionsCount = presenceValidation.validConnectionsCount;
+      const hasPendingActivation = presenceValidation.hasPendingActivation;
+      const isOnline = presenceValidation.isOnline;
+      const presenceStatus = presenceValidation.presenceStatus;
+      const observedGeneration = typeof userActivity.connectionGeneration === 'number'
+        ? userActivity.connectionGeneration
+        : 0;
+
+      // Auto-reconcile orphaned presence: socket disconnected unexpectedly without explicit logout
+      // Protected by:
+      // 1. hasPendingActivation check: never finalize while an activation is in-flight
+      // 2. expectedGeneration guard: if user reconnected (advancing generation), finalization aborts
+      if (!isOnline && !hasPendingActivation && userActivity.currentStatus === 'online') {
+        finalizeUserSessionAtomic(adminRtdb, uid, {
+          targetSessionId: (userActivity.activeSessionId as string) || null,
+          expectedGeneration: observedGeneration,
+          reason: 'connection_lost',
+          serverEpoch: nowEpoch,
+          serverTime: new Date(nowEpoch).toISOString(),
+        }).catch((err) => console.warn('[AdminUserLogAPI] Orphaned session reconciliation warning:', err));
+      }
 
       if (filterPresence === 'online_only' && !isOnline) {
         continue;
@@ -172,11 +196,16 @@ export async function GET(req: Request) {
       const lastLoginAtRaw = (userActivity.lastLoginAt as string) || authUser?.metadata.lastSignInTime || (fsData.lastLoginAt as string) || createdAtRaw || '';
       const lastLoginEpoch = lastLoginAtRaw ? new Date(lastLoginAtRaw).getTime() : createdEpoch;
 
-      const lastLogoutAtRaw = (userActivity.lastLogoutAt as string) || (fsData.lastSessionEndedAt as string) || null;
       const lastActivityAtRaw = (userActivity.lastActivityAt as string) || lastLoginAtRaw || null;
       const lastActivityEpoch = lastActivityAtRaw ? new Date(lastActivityAtRaw).getTime() : lastLoginEpoch;
 
-      const lastLogoutReason = (userActivity.lastLogoutReason as string) || (isOnline ? null : 'connection_lost');
+      const lastLogoutAtRaw = (!isOnline && userActivity.currentStatus === 'online')
+        ? (lastActivityAtRaw || new Date(nowEpoch).toISOString())
+        : ((userActivity.lastLogoutAt as string) || (fsData.lastSessionEndedAt as string) || null);
+
+      const lastLogoutReason = (!isOnline && userActivity.currentStatus === 'online')
+        ? 'connection_lost'
+        : ((userActivity.lastLogoutReason as string) || (isOnline ? null : 'connection_lost'));
 
       // Cumulative Duration Calculation:
       const baseTotalSec = typeof userActivity.totalTimeSpentSeconds === 'number'
@@ -190,6 +219,11 @@ export async function GET(req: Request) {
 
       if (isOnline && sessionStartEpoch > 0) {
         currentSessionSec = Math.max(0, Math.floor((nowEpoch - sessionStartEpoch) / 1000));
+      } else if (!isOnline && userActivity.currentStatus === 'online' && sessionStartEpoch > 0) {
+        const effectiveEndEpoch = lastActivityEpoch > sessionStartEpoch ? lastActivityEpoch : sessionStartEpoch;
+        currentSessionSec = Math.max(0, Math.floor((effectiveEndEpoch - sessionStartEpoch) / 1000));
+      } else {
+        currentSessionSec = 0;
       }
 
       const totalTimeSpentSec = baseTotalSec + currentSessionSec;
@@ -200,6 +234,7 @@ export async function GET(req: Request) {
         email: (fsData.email as string) || authUser?.email || 'N/A',
         role: effectiveRole,
         isOnline,
+        presenceStatus,
         activeConnectionsCount,
         lastLogoutReason,
         lastLoginAt: lastLoginAtRaw ? new Date(lastLoginAtRaw).toISOString() : null,
@@ -277,15 +312,23 @@ export async function GET(req: Request) {
           }
 
           // Presence Pill
-          const presenceBadge = u.isOnline
-            ? `<span style="display:inline-flex; align-items:center; gap:6px; padding:4px 10px; border-radius:9999px; font-size:11px; font-weight:700; background:#dcfce7; color:#15803d; border:1px solid #86efac;">
+          let presenceBadge: string;
+          if (u.presenceStatus === 'online') {
+            presenceBadge = `<span style="display:inline-flex; align-items:center; gap:6px; padding:4px 10px; border-radius:9999px; font-size:11px; font-weight:700; background:#dcfce7; color:#15803d; border:1px solid #86efac;">
                 <span style="display:inline-block; width:8px; height:8px; border-radius:50%; background:#22c55e; box-shadow:0 0 8px #22c55e;"></span>
-                ONLINE (${u.activeConnectionsCount} ${u.activeConnectionsCount > 1 ? 'tabs' : 'tab'})
-               </span>`
-            : `<span style="display:inline-flex; align-items:center; gap:6px; padding:4px 10px; border-radius:9999px; font-size:11px; font-weight:700; background:#f1f5f9; color:#64748b; border:1px solid #cbd5e1;">
+                ONLINE (${u.activeConnectionsCount} ${u.activeConnectionsCount === 1 ? 'tab' : 'tabs'})
+               </span>`;
+          } else if (u.presenceStatus === 'pending') {
+            presenceBadge = `<span style="display:inline-flex; align-items:center; gap:6px; padding:4px 10px; border-radius:9999px; font-size:11px; font-weight:700; background:#fef3c7; color:#b45309; border:1px solid #fcd34d;">
+                <span style="display:inline-block; width:8px; height:8px; border-radius:50%; background:#f59e0b; box-shadow:0 0 8px #f59e0b;"></span>
+                PENDING (connecting...)
+               </span>`;
+          } else {
+            presenceBadge = `<span style="display:inline-flex; align-items:center; gap:6px; padding:4px 10px; border-radius:9999px; font-size:11px; font-weight:700; background:#f1f5f9; color:#64748b; border:1px solid #cbd5e1;">
                 <span style="display:inline-block; width:8px; height:8px; border-radius:50%; background:#94a3b8;"></span>
                 OFFLINE
                </span>`;
+          }
 
           return `
           <tr style="border-bottom: 1px solid #e2e8f0; ${idx % 2 === 1 ? 'background-color: #f8fafc;' : ''}">
@@ -449,7 +492,8 @@ export async function GET(req: Request) {
       success: true,
       total: records.length,
       onlineCount: records.filter((r) => r.isOnline).length,
-      offlineCount: records.filter((r) => !r.isOnline).length,
+      pendingCount: records.filter((r) => r.presenceStatus === 'pending').length,
+      offlineCount: records.filter((r) => r.presenceStatus === 'offline').length,
       sortBy,
       filterRole,
       filterPresence,

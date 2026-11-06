@@ -1,11 +1,21 @@
 import { NextResponse } from 'next/server';
 import { adminAuth, adminRtdb, adminDb } from '@/lib/firebaseAdmin';
+import {
+  finalizeUserSessionAtomic,
+  evaluateSessionCreation,
+  reserveConnection,
+  activateConnection,
+} from '@/lib/rtdbSession';
 
 interface SessionRequestBody {
-  action?: 'login' | 'heartbeat' | 'activity' | 'logout' | 'timeout';
+  action?: 'login' | 'connect' | 'reserve_connection' | 'activate_connection' | 'heartbeat' | 'activity' | 'logout' | 'timeout' | 'reconcile';
   connectionKey?: string;
+  previousConnectionKey?: string;
+  sessionId?: string;
   reason?: 'explicit_logout' | 'inactivity_timeout' | 'connection_lost';
+  isExplicitLogin?: boolean;
   token?: string;
+  expectedGeneration?: number;
 }
 
 export async function POST(req: Request) {
@@ -34,7 +44,7 @@ export async function POST(req: Request) {
     }
 
     const uid = decodedToken.uid;
-    const action = body.action || 'activity';
+    const action = body.action || 'connect';
     const serverTime = new Date().toISOString();
     const serverEpoch = Date.now();
 
@@ -52,52 +62,150 @@ export async function POST(req: Request) {
     const activityRef = adminRtdb.ref(`activity/${uid}`);
     const presenceRef = adminRtdb.ref(`presence/${uid}`);
 
-    if (action === 'login') {
-      const [activitySnap, presenceSnap] = await Promise.all([
-        activityRef.once('value'),
-        presenceRef.once('value'),
-      ]);
-
-      const existingActivity = activitySnap.val() || {};
-      const existingPresence = presenceSnap.val() || {};
-      const activeConnectionsCount = Object.keys(existingPresence).length;
-
-      // Generate trusted server-side connection identifier
-      const connectionKey = `conn_${serverEpoch}_${Math.random().toString(36).substring(2, 9)}`;
-
-      // Register new connection
-      await adminRtdb.ref(`presence/${uid}/${connectionKey}`).set({
-        connectedAt: serverTime,
-        lastSeenAt: serverTime,
+    // ACTION: RESERVE_CONNECTION (Phase 1 of 2-phase connection handshake)
+    // Generates connectionKey and reserves it without creating an active presence record
+    if (action === 'reserve_connection') {
+      const reservation = await reserveConnection(adminRtdb, {
+        uid,
+        decodedToken,
+        serverEpoch,
         role,
+        previousConnectionKey: body.previousConnectionKey,
       });
-
-      // Update activity summary: if user was offline or this is the first connection
-      const activityPayload: Record<string, unknown> = {
-        lastActivityAt: serverTime,
-        currentStatus: 'online',
-        activeRole: role,
-        lastLogoutReason: null,
-      };
-
-      if (activeConnectionsCount === 0 || existingActivity.currentStatus !== 'online') {
-        activityPayload.lastLoginAt = serverTime;
-        activityPayload.sessionStartEpoch = serverEpoch;
-        if (typeof existingActivity.totalTimeSpentSeconds !== 'number') {
-          activityPayload.totalTimeSpentSeconds = 0;
-        }
-      }
-
-      await activityRef.update(activityPayload);
 
       return NextResponse.json({
         success: true,
+        connectionKey: reservation.connectionKey,
+        sessionId: reservation.sessionId,
+        isNewSession: reservation.isNewSession,
+        expiresAt: reservation.expiresAt,
+        serverTime,
+      });
+    }
+
+    // ACTION: ACTIVATE_CONNECTION (Phase 2 of 2-phase connection handshake)
+    // Called ONLY after client has successfully registered onDisconnect().remove()
+    if (action === 'activate_connection') {
+      const connectionKey = body.connectionKey || '';
+      const sessionId = body.sessionId || '';
+
+      const result = await activateConnection(adminRtdb, {
+        uid,
         connectionKey,
+        sessionId,
+        serverEpoch,
+        serverTime,
+        role,
+      });
+
+      if (!result.activated) {
+        return NextResponse.json(
+          { success: false, error: result.reason || 'Activation failed' },
+          { status: 400 }
+        );
+      }
+
+      return NextResponse.json({
+        success: true,
+        connectionKey: result.connectionKey,
+        sessionId: result.sessionId,
+        connectionGeneration: result.connectionGeneration,
+        activationId: result.activationId,
         serverTime,
         currentStatus: 'online',
       });
     }
 
+    // ACTION: CONNECT or LOGIN (Direct / Backward-compatible path)
+    // Establishes a physical connection and atomically advances connectionGeneration
+    if (action === 'login' || action === 'connect') {
+      const [activitySnap] = await Promise.all([
+        activityRef.once('value'),
+      ]);
+
+      const existingActivity = activitySnap.val() || {};
+
+      // Cryptographically verified credential authentication recency check
+      const decision = evaluateSessionCreation(decodedToken, existingActivity, serverEpoch);
+      const isNewSession = decision.isNewSession;
+      const authTime = decision.authTime;
+
+      let sessionId: string;
+      if (!isNewSession && existingActivity.activeSessionId) {
+        // Reuse existing logical session: browser refresh, route change, or additional tab
+        sessionId = existingActivity.activeSessionId as string;
+      } else {
+        // Genuinely new logical login
+        sessionId = `sess_${serverEpoch}_${Math.random().toString(36).substring(2, 9)}`;
+
+        // If there was an old unfinalized session from hours ago or prior to re-login, finalize it first
+        if (existingActivity.currentStatus === 'online' && existingActivity.activeSessionId) {
+          await finalizeUserSessionAtomic(adminRtdb, uid, {
+            targetSessionId: existingActivity.activeSessionId as string,
+            reason: decision.reason === 'new_credential_login' ? 'explicit_logout' : 'inactivity_timeout',
+            serverEpoch,
+            serverTime,
+          });
+        }
+      }
+
+      // Generate trusted server-side connection identifier (clients cannot write arbitrary keys)
+      const connectionKey = `conn_${serverEpoch}_${Math.random().toString(36).substring(2, 9)}`;
+
+      // Register connection under /presence/{uid}/{connectionKey}
+      await adminRtdb.ref(`presence/${uid}/${connectionKey}`).set({
+        connectedAt: serverTime,
+        lastSeenAt: serverTime,
+        role,
+        sessionId,
+      });
+
+      // Atomically advance connectionGeneration in /activity/{uid}
+      let connectionGeneration = 1;
+      await activityRef.transaction((current) => {
+        if (!current) {
+          current = {
+            totalTimeSpentSeconds: 0,
+            connectionGeneration: 0,
+          };
+        }
+
+        const currentGen = typeof current.connectionGeneration === 'number' ? current.connectionGeneration : 0;
+        connectionGeneration = currentGen + 1;
+
+        current.connectionGeneration = connectionGeneration;
+        current.currentStatus = 'online';
+        current.lastActivityAt = serverTime;
+        current.activeRole = role;
+        current.lastLogoutReason = null;
+        current.activeSessionId = sessionId;
+
+        if (isNewSession) {
+          current.lastLoginAt = serverTime;
+          current.sessionStartEpoch = serverEpoch;
+          if (authTime !== null && authTime !== undefined) {
+            current.lastAuthTime = authTime;
+          }
+          if (typeof current.totalTimeSpentSeconds !== 'number') {
+            current.totalTimeSpentSeconds = 0;
+          }
+        }
+
+        return current;
+      });
+
+      return NextResponse.json({
+        success: true,
+        connectionKey,
+        sessionId,
+        connectionGeneration,
+        serverTime,
+        currentStatus: 'online',
+        isNewSession,
+      });
+    }
+
+    // ACTION: HEARTBEAT or ACTIVITY
     if (action === 'heartbeat' || action === 'activity') {
       const connectionKey = body.connectionKey;
       const updates: Record<string, unknown> = {
@@ -118,33 +226,64 @@ export async function POST(req: Request) {
       });
     }
 
+    // ACTION: LOGOUT or TIMEOUT
     if (action === 'logout' || action === 'timeout') {
       const connectionKey = body.connectionKey;
+      const targetSessionId = body.sessionId;
       const reason = action === 'timeout' ? 'inactivity_timeout' : (body.reason || 'explicit_logout');
 
       if (connectionKey) {
-        await adminRtdb.ref(`presence/${uid}/${connectionKey}`).remove();
+        await adminRtdb.ref(`presence/${uid}/${connectionKey}`).remove().catch(() => {});
+        await adminRtdb.ref(`activity/${uid}/verifiedConnections/${connectionKey}`).remove().catch(() => {});
       }
 
-      // Check if any connections remain for this user
-      const remainingPresenceSnap = await presenceRef.once('value');
-      const remainingConnections = remainingPresenceSnap.val() || {};
-      const remainingCount = Object.keys(remainingConnections).length;
+      // Fetch presence and verified connections for this user to perform session-fenced cleanup
+      const [presenceSnap, verifiedSnap] = await Promise.all([
+        presenceRef.once('value'),
+        adminRtdb.ref(`activity/${uid}/verifiedConnections`).once('value'),
+      ]);
 
-      // Only mark entire user offline if zero connections remain
-      if (remainingCount === 0) {
-        const activitySnap = await activityRef.once('value');
-        const act = activitySnap.val() || {};
-        const startEpoch = typeof act.sessionStartEpoch === 'number' ? act.sessionStartEpoch : serverEpoch;
-        const durationSec = Math.max(0, Math.floor((serverEpoch - startEpoch) / 1000));
-        const currentTotal = typeof act.totalTimeSpentSeconds === 'number' ? act.totalTimeSpentSeconds : 0;
+      const presenceVal = (presenceSnap.val() || {}) as Record<string, { sessionId?: string }>;
+      const verifiedVal = (verifiedSnap.val() || {}) as Record<string, { sessionId?: string }>;
 
-        await activityRef.update({
-          currentStatus: 'offline',
-          lastLogoutAt: serverTime,
-          lastLogoutReason: reason,
-          totalTimeSpentSeconds: currentTotal + durationSec,
-          lastActivityAt: serverTime,
+      // If targetSessionId is specified, remove ONLY presence and verified connections matching targetSessionId
+      if (targetSessionId) {
+        const removalPromises: Promise<void>[] = [];
+        for (const [key, conn] of Object.entries(presenceVal)) {
+          if (conn && conn.sessionId === targetSessionId) {
+            removalPromises.push(adminRtdb.ref(`presence/${uid}/${key}`).remove().catch(() => {}));
+            delete presenceVal[key];
+          }
+        }
+        for (const [key, reg] of Object.entries(verifiedVal)) {
+          if (reg && reg.sessionId === targetSessionId) {
+            removalPromises.push(adminRtdb.ref(`activity/${uid}/verifiedConnections/${key}`).remove().catch(() => {}));
+            delete verifiedVal[key];
+          }
+        }
+        await Promise.all(removalPromises);
+      } else if (reason === 'explicit_logout' || action === 'timeout') {
+        // Blanket cleanup only when no targetSessionId is specified
+        await Promise.all([
+          presenceRef.remove().catch(() => {}),
+          adminRtdb.ref(`activity/${uid}/verifiedConnections`).remove().catch(() => {}),
+        ]);
+        Object.keys(presenceVal).forEach((k) => delete presenceVal[k]);
+      }
+
+      // Remaining count of active connections for this user
+      const remainingCount = Object.keys(presenceVal).length;
+
+      // Finalize session atomically:
+      // - If targetSessionId is given, finalize that specific session (finalizeUserSessionAtomic fences by targetSessionId).
+      // - If no targetSessionId and remainingCount === 0 (or explicit_logout / timeout), finalize current session.
+      let finalizationResult = null;
+      if (targetSessionId || remainingCount === 0 || reason === 'explicit_logout' || action === 'timeout') {
+        finalizationResult = await finalizeUserSessionAtomic(adminRtdb, uid, {
+          targetSessionId,
+          reason,
+          serverEpoch,
+          serverTime,
         });
       }
 
@@ -152,6 +291,7 @@ export async function POST(req: Request) {
         success: true,
         serverTime,
         remainingConnections: remainingCount,
+        finalized: finalizationResult?.finalized ?? false,
       });
     }
 
