@@ -68,9 +68,14 @@ export default function PresenceTracker() {
           }),
         });
 
-        if (!res.ok) return null;
+        if (!res.ok) {
+          const errData = await res.json().catch(() => ({}));
+          console.warn(`[PresenceTracker] API ${action} returned HTTP ${res.status}:`, errData);
+          return null;
+        }
         return await res.json();
-      } catch {
+      } catch (err) {
+        console.warn(`[PresenceTracker] API ${action} network failure:`, err);
         return null;
       }
     };
@@ -121,7 +126,12 @@ export default function PresenceTracker() {
           sessionId: sessId,
         });
 
-        if (!isSubscribed || !activateResult?.activated) {
+        const isActivated = Boolean(
+          activateResult && (activateResult.activated === true || activateResult.success === true)
+        );
+
+        if (!isSubscribed || !isActivated) {
+          console.warn('[PresenceTracker] Activation failed or unconfirmed:', activateResult);
           try {
             await onDisconnect(clientConnRef).cancel();
             remove(clientConnRef).catch(() => {});

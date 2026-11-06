@@ -107,6 +107,7 @@ export async function POST(req: Request) {
 
       return NextResponse.json({
         success: true,
+        activated: true,
         connectionKey: result.connectionKey,
         sessionId: result.sessionId,
         connectionGeneration: result.connectionGeneration,
