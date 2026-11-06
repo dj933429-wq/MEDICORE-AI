@@ -149,18 +149,11 @@ export async function POST(req: Request) {
         }
       }
 
-      // Generate trusted server-side connection identifier (clients cannot write arbitrary keys)
+      // Generate trusted server-side connection and activation identifiers
       const connectionKey = `conn_${serverEpoch}_${Math.random().toString(36).substring(2, 9)}`;
+      const activationId = `act_${serverEpoch}_${Math.random().toString(36).substring(2, 9)}`;
 
-      // Register connection under /presence/{uid}/{connectionKey}
-      await adminRtdb.ref(`presence/${uid}/${connectionKey}`).set({
-        connectedAt: serverTime,
-        lastSeenAt: serverTime,
-        role,
-        sessionId,
-      });
-
-      // Atomically advance connectionGeneration in /activity/{uid}
+      // Atomically advance connectionGeneration and register in verifiedConnections
       let connectionGeneration = 1;
       await activityRef.transaction((current) => {
         if (!current) {
@@ -180,9 +173,15 @@ export async function POST(req: Request) {
         current.lastLogoutReason = null;
         current.activeSessionId = sessionId;
 
+        if (typeof current.sessionStartGeneration !== 'number') {
+          current.sessionStartGeneration = connectionGeneration;
+        }
+
         if (isNewSession) {
           current.lastLoginAt = serverTime;
           current.sessionStartEpoch = serverEpoch;
+          current.sessionStartGeneration = connectionGeneration;
+          current.verifiedConnections = {};
           if (authTime !== null && authTime !== undefined) {
             current.lastAuthTime = authTime;
           }
@@ -191,7 +190,30 @@ export async function POST(req: Request) {
           }
         }
 
+        if (!current.verifiedConnections || typeof current.verifiedConnections !== 'object') {
+          current.verifiedConnections = {};
+        }
+
+        // Register in Authoritative Verified Connection Registry
+        current.verifiedConnections[connectionKey] = {
+          connectionKey,
+          activationId,
+          sessionId,
+          connectionGeneration,
+          verifiedAtEpoch: serverEpoch,
+        };
+
         return current;
+      });
+
+      // Register connection under /presence/{uid}/{connectionKey} with matching activation metadata
+      await adminRtdb.ref(`presence/${uid}/${connectionKey}`).set({
+        connectedAt: serverTime,
+        lastSeenAt: serverTime,
+        role,
+        sessionId,
+        activationId,
+        connectionGeneration,
       });
 
       return NextResponse.json({

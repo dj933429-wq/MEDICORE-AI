@@ -558,6 +558,23 @@ Tested and confirmed 8 genuine issues identified during live QA testing of `http
   - `npm run lint`: **0 errors** (0 errors, 6 benign warnings).
   - `npm run build`: **22/22 routes cleanly compiled** (production Next.js 16 build passed).
 
+---
+
+### Completed: Phase 3.9 — Admin User-Log Monitoring Remediation & Login Presence De-confliction
+- **Root Cause Remediation:**
+  1. **Legacy `action === 'login'` Rogue Presence Bug:** In `src/lib/auth.js`, `login()` called `fetch('/api/presence/session', { body: JSON.stringify({ action: 'login' }) })`. In `/api/presence/session/route.ts`, this wrote an unverified presence node without `activationId`, without `connectionGeneration`, and without registering in `activity.verifiedConnections`.
+  2. **Premature Auto-Reconciliation in `/api/admin/user-log`:** When an admin loaded or polled `/admin/user-log`, `validateUserPresence` evaluated the unverified connection node as stale (`validConnectionsCount === 0`, `isOnline === false`). Because `userActivity.currentStatus === 'online'`, the endpoint immediately triggered `finalizeUserSessionAtomic` with reason `connection_lost`, killing newly logged in user sessions within 3-12 seconds of login.
+  3. **In-Flight Connection Vulnerability:** During page navigation from `/login` to `/dashboard`, the 3-phase activation handshake was interrupted or preemptively finalized by admin polling before `<PresenceTracker />` could commit Phase C.
+- **Implementation & Architectural Safeguards:**
+  1. **Removed Legacy Login Fetch (`src/lib/auth.js`):** Eliminated the redundant `fetch('/api/presence/session', { body: JSON.stringify({ action: 'login' }) })` call from `login()`. `<PresenceTracker />` in `Providers` remains the single authoritative source of connection reservation, socket hook attachment, and verified activation.
+  2. **Backward-Compatible Route Hardening (`src/app/api/presence/session/route.ts`):** Hardened `action === 'login' || action === 'connect'` so that if ever called directly, it atomically generates an `activationId`, synchronizes `connectionGeneration`, registers in `verifiedConnections`, and writes conformant metadata to `/presence/{uid}/{connectionKey}`.
+  3. **Auto-Reconciliation 60-Second Grace Period (`src/app/api/admin/user-log/route.ts`):** Guarded `finalizeUserSessionAtomic` with `!isRecentActivity` (`nowEpoch - lastActivityEpoch >= 60000` and `nowEpoch - lastLoginEpoch >= 60000`). Newly authenticated users or users navigating between pages are never prematurely finalized as `connection_lost`.
+  4. **Production RTDB Zombie Node Cleanup:** Purged historical unverified presence nodes (`activationId: undefined`) from the live database.
+- **Verification & Safeguards:**
+  - Spark Free tier ($0/month) strictly preserved with zero runtime Cloud Functions.
+  - 10-minute inactivity timeout strictly preserved.
+  - Zero regressions across Admin role management, Menstrual tracking, and Blood Bank subsystems.
+
 
 
 

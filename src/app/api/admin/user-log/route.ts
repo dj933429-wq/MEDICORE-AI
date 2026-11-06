@@ -160,22 +160,39 @@ export async function GET(req: Request) {
       const createdAtRaw = (fsData.createdAt as string) || authUser?.metadata.creationTime || '';
       const createdEpoch = createdAtRaw ? new Date(createdAtRaw).getTime() : 0;
 
+      // Authoritative Timestamps from RTDB / Auth
+      const lastLoginAtRaw = (userActivity.lastLoginAt as string) || authUser?.metadata.lastSignInTime || (fsData.lastLoginAt as string) || createdAtRaw || '';
+      const lastLoginEpoch = lastLoginAtRaw ? new Date(lastLoginAtRaw).getTime() : createdEpoch;
+
+      const lastActivityAtRaw = (userActivity.lastActivityAt as string) || lastLoginAtRaw || null;
+      const lastActivityEpoch = lastActivityAtRaw ? new Date(lastActivityAtRaw).getTime() : lastLoginEpoch;
+
       // Realtime Presence Validation:
       // Validates connections against active session and generation; eliminates raw Object.keys trust
       const presenceValidation = validateUserPresence(userPresence, userActivity, nowEpoch);
       const activeConnectionsCount = presenceValidation.validConnectionsCount;
       const hasPendingActivation = presenceValidation.hasPendingActivation;
       const isOnline = presenceValidation.isOnline;
-      const presenceStatus = presenceValidation.presenceStatus;
+      const rawPresenceStatus = presenceValidation.presenceStatus;
       const observedGeneration = typeof userActivity.connectionGeneration === 'number'
         ? userActivity.connectionGeneration
         : 0;
+
+      // Grace period guard: never auto-reconcile or finalize as connection_lost if
+      // the user authenticated or had verified activity within the last 60 seconds (handshake/navigation window)
+      const isRecentActivity = (lastActivityEpoch > 0 && (nowEpoch - lastActivityEpoch < 60000)) ||
+                               (lastLoginEpoch > 0 && (nowEpoch - lastLoginEpoch < 60000));
+
+      const presenceStatus = (!isOnline && isRecentActivity && userActivity.currentStatus === 'online')
+        ? 'pending'
+        : rawPresenceStatus;
 
       // Auto-reconcile orphaned presence: socket disconnected unexpectedly without explicit logout
       // Protected by:
       // 1. hasPendingActivation check: never finalize while an activation is in-flight
       // 2. expectedGeneration guard: if user reconnected (advancing generation), finalization aborts
-      if (!isOnline && !hasPendingActivation && userActivity.currentStatus === 'online') {
+      // 3. isRecentActivity grace period: never finalize in-flight login, tab redirect, or connection handshake (<60s)
+      if (!isOnline && !hasPendingActivation && !isRecentActivity && userActivity.currentStatus === 'online') {
         finalizeUserSessionAtomic(adminRtdb, uid, {
           targetSessionId: (userActivity.activeSessionId as string) || null,
           expectedGeneration: observedGeneration,
@@ -192,20 +209,13 @@ export async function GET(req: Request) {
         continue;
       }
 
-      // Authoritative Timestamps from RTDB / Auth
-      const lastLoginAtRaw = (userActivity.lastLoginAt as string) || authUser?.metadata.lastSignInTime || (fsData.lastLoginAt as string) || createdAtRaw || '';
-      const lastLoginEpoch = lastLoginAtRaw ? new Date(lastLoginAtRaw).getTime() : createdEpoch;
-
-      const lastActivityAtRaw = (userActivity.lastActivityAt as string) || lastLoginAtRaw || null;
-      const lastActivityEpoch = lastActivityAtRaw ? new Date(lastActivityAtRaw).getTime() : lastLoginEpoch;
-
-      const lastLogoutAtRaw = (!isOnline && userActivity.currentStatus === 'online')
+      const lastLogoutAtRaw = (!isOnline && userActivity.currentStatus === 'online' && !isRecentActivity)
         ? (lastActivityAtRaw || new Date(nowEpoch).toISOString())
         : ((userActivity.lastLogoutAt as string) || (fsData.lastSessionEndedAt as string) || null);
 
-      const lastLogoutReason = (!isOnline && userActivity.currentStatus === 'online')
+      const lastLogoutReason = (!isOnline && userActivity.currentStatus === 'online' && !isRecentActivity)
         ? 'connection_lost'
-        : ((userActivity.lastLogoutReason as string) || (isOnline ? null : 'connection_lost'));
+        : ((userActivity.lastLogoutReason as string) || (isOnline ? null : (isRecentActivity ? null : 'connection_lost')));
 
       // Cumulative Duration Calculation:
       const baseTotalSec = typeof userActivity.totalTimeSpentSeconds === 'number'

@@ -296,21 +296,6 @@ export const login = async (email, password) => {
   } catch (err) {
     console.warn("Could not update lastLoginAt on login:", err);
   }
-  try {
-    const token = await userCredential.user.getIdToken();
-    if (token) {
-      await fetch('/api/presence/session', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({ action: 'login' }),
-      }).catch(() => {});
-    }
-  } catch {
-    // Non-critical presence initialization
-  }
   return userCredential.user;
 };
 
