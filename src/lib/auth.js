@@ -62,10 +62,6 @@ export const AuthProvider = ({ children }) => {
 
         setLoading(true);
         try {
-          // Fetch the user's role from their /users/{uid} document
-          const docRef = doc(db, 'users', firebaseUser.uid);
-          const docSnap = await getDoc(docRef);
-
           let userData = {};
           let role = 'patient';
 
@@ -82,8 +78,51 @@ export const AuthProvider = ({ children }) => {
             } catch {}
           }
 
+          // Check sessionStorage cache for profile data to eliminate redundant Firestore reads on page navigation / reload
+          const profileCacheKey = `medicore_user_profile_${firebaseUser.uid}`;
+          let cachedProfile = null;
+          if (typeof window !== 'undefined') {
+            try {
+              const raw = sessionStorage.getItem(profileCacheKey);
+              if (raw) {
+                const parsed = JSON.parse(raw);
+                if (parsed && (Date.now() - parsed.timestamp < 5 * 60 * 1000)) {
+                  cachedProfile = parsed.data;
+                }
+              }
+            } catch {}
+          }
+
+          if (cachedProfile) {
+            userData = cachedProfile;
+            role = customRole || userData.role || 'patient';
+            setUser({ 
+              ...firebaseUser, 
+              ...userData,
+              role,
+              customRole,
+              profileRole: userData.role || role,
+              getIdToken: (forceRefresh) => firebaseUser.getIdToken(forceRefresh),
+              getIdTokenResult: (forceRefresh) => firebaseUser.getIdTokenResult(forceRefresh)
+            });
+            setLoading(false);
+            return;
+          }
+
+          // Fetch the user's role from their /users/{uid} document if not cached
+          const docRef = doc(db, 'users', firebaseUser.uid);
+          const docSnap = await getDoc(docRef);
+
           if (docSnap.exists()) {
             userData = docSnap.data();
+            if (typeof window !== 'undefined') {
+              try {
+                sessionStorage.setItem(profileCacheKey, JSON.stringify({
+                  data: userData,
+                  timestamp: Date.now()
+                }));
+              } catch {}
+            }
             // Prioritize custom claims if set, otherwise use the role from /users/{uid}
             role = customRole || userData.role || 'patient';
             setUser({ 
@@ -304,6 +343,9 @@ export const logout = async () => {
   if (typeof window !== 'undefined') {
     try {
       localStorage.removeItem(INACTIVITY_STORAGE_KEY);
+      if (auth.currentUser?.uid) {
+        sessionStorage.removeItem(`medicore_user_profile_${auth.currentUser.uid}`);
+      }
       const rawTab = sessionStorage.getItem('medicore_presence_tab');
       if (rawTab) {
         tabInfo = JSON.parse(rawTab);

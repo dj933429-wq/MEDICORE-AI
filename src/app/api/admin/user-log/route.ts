@@ -5,6 +5,11 @@ import {
   validateUserPresence,
 } from '@/lib/rtdbSession';
 
+// In-memory cache for Firestore user profiles to eliminate full-collection reads on every 60s auto-refresh
+let cachedFirestoreProfiles: Map<string, Record<string, unknown>> | null = null;
+let lastFirestoreProfilesFetchEpoch = 0;
+const PROFILES_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes TTL
+
 /**
  * Verify caller has Administrator privileges (via Custom Claim or verified Firestore role)
  */
@@ -125,15 +130,26 @@ export async function GET(req: Request) {
       authMap.set(u.uid, u);
     });
 
-    // 3. Gracefully fetch Firestore user documents for display profiles (without failing if quota reached)
+    // 3. Gracefully fetch Firestore user documents for display profiles (with 5-minute in-memory caching)
     const firestoreMap = new Map<string, Record<string, unknown>>();
-    try {
-      const usersSnap = await adminDb.collection('users').get();
-      usersSnap.forEach((doc) => {
-        firestoreMap.set(doc.id, doc.data());
-      });
-    } catch {
-      // Non-critical fallback for profile display names
+    const nowForCache = Date.now();
+    if (cachedFirestoreProfiles && (nowForCache - lastFirestoreProfilesFetchEpoch < PROFILES_CACHE_TTL_MS)) {
+      // Warm in-memory cache hit: 0 Firestore reads on 60s auto-refresh!
+      cachedFirestoreProfiles.forEach((val, key) => firestoreMap.set(key, val));
+    } else {
+      try {
+        const usersSnap = await adminDb.collection('users').get();
+        usersSnap.forEach((doc) => {
+          firestoreMap.set(doc.id, doc.data());
+        });
+        cachedFirestoreProfiles = new Map(firestoreMap);
+        lastFirestoreProfilesFetchEpoch = nowForCache;
+      } catch (fsErr) {
+        console.warn('[AdminUserLogAPI] Firestore read bypassed or quota reached:', fsErr);
+        if (cachedFirestoreProfiles) {
+          cachedFirestoreProfiles.forEach((val, key) => firestoreMap.set(key, val));
+        }
+      }
     }
 
     // 4. Compile active presence and session data

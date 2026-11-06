@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '../../lib/auth';
 import { db } from '../../lib/firebase';
-import { collection, query, getDocs, where, doc, getDoc, updateDoc, addDoc, serverTimestamp, orderBy } from 'firebase/firestore';
+import { collection, query, getDocs, where, doc, getDoc, updateDoc, addDoc, serverTimestamp } from 'firebase/firestore';
 
 interface MedicalRecordEntry {
   id?: string;
@@ -76,7 +76,7 @@ export default function DoctorDashboard() {
         const completedAppts = apptsFound.filter(a => a.status === 'completed' || a.recordAdded);
         const patientIds = [...new Set(completedAppts.map(a => a.patientId))];
 
-        // 3. Fetch core Patient Models independently
+        // 3. Fetch core Patient Models independently (without eagerly reading subcollections)
         const fetchedPatients: Patient[] = [];
         
         await Promise.all(
@@ -86,11 +86,7 @@ export default function DoctorDashboard() {
                  docSnap = await getDoc(doc(db, 'users', pId));
              }
              if (docSnap.exists()) {
-                 const pData = { ...docSnap.data(), id: docSnap.id } as Patient;
-                 const rSnap = await getDocs(query(collection(db, `patients/${pId}/medicalRecords`), orderBy('createdAt', 'desc')));
-                 const recs: MedicalRecordEntry[] = [];
-                 rSnap.forEach(r => recs.push({ ...r.data(), id: r.id } as MedicalRecordEntry));
-                 pData.records = recs;
+                 const pData = { ...docSnap.data(), id: docSnap.id, records: [] } as Patient;
                  fetchedPatients.push(pData);
              }
           })

@@ -155,12 +155,37 @@ export default function PatientDashboard() {
         
         setRecords(fetchedRecords);
 
-        // 3. Fetch Doctors List from Minimal Public Lookup Collection
+        // 3. Fetch Doctors List from Minimal Public Lookup Collection (with 10-minute client caching)
         try {
-          const dSnap = await getDocs(collection(db, 'publicDoctorProfiles'));
-          const docsFound: Doctor[] = [];
-          dSnap.forEach(d => docsFound.push({ ...(d.data() as Doctor), id: d.id }));
-          setDoctors(docsFound);
+          let cachedDoctors: Doctor[] | null = null;
+          if (typeof window !== 'undefined') {
+            try {
+              const raw = sessionStorage.getItem('medicore_public_doctors');
+              if (raw) {
+                const parsed = JSON.parse(raw);
+                if (parsed && (Date.now() - parsed.timestamp < 10 * 60 * 1000)) {
+                  cachedDoctors = parsed.data;
+                }
+              }
+            } catch {}
+          }
+
+          if (cachedDoctors && cachedDoctors.length > 0) {
+            setDoctors(cachedDoctors);
+          } else {
+            const dSnap = await getDocs(collection(db, 'publicDoctorProfiles'));
+            const docsFound: Doctor[] = [];
+            dSnap.forEach(d => docsFound.push({ ...(d.data() as Doctor), id: d.id }));
+            setDoctors(docsFound);
+            if (typeof window !== 'undefined' && docsFound.length > 0) {
+              try {
+                sessionStorage.setItem('medicore_public_doctors', JSON.stringify({
+                  data: docsFound,
+                  timestamp: Date.now()
+                }));
+              } catch {}
+            }
+          }
         } catch(e) { console.error("Error fetching available doctors from public lookup", e); }
 
         // 4. Fetch Appointments

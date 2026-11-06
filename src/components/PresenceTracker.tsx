@@ -64,6 +64,7 @@ export default function PresenceTracker() {
             action,
             connectionKey: connectionKeyRef.current,
             sessionId: sessionIdRef.current,
+            role: (user as { role?: string })?.role || 'patient',
             ...extra,
           }),
         });

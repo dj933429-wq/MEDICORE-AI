@@ -5,6 +5,16 @@ import { FieldValue } from 'firebase-admin/firestore';
 const ALLOWED_ADMIN_ROLES = ['patient', 'doctor', 'pharmacist', 'blood_bank'] as const;
 type AllowedRole = typeof ALLOWED_ADMIN_ROLES[number];
 
+// In-memory cache for Firestore user documents in Admin Users directory (5-minute TTL)
+let cachedUsersDirectory: Map<string, Record<string, unknown>> | null = null;
+let lastUsersDirectoryFetchEpoch = 0;
+const DIRECTORY_CACHE_TTL_MS = 5 * 60 * 1000;
+
+function invalidateUsersCache() {
+  cachedUsersDirectory = null;
+  lastUsersDirectoryFetchEpoch = 0;
+}
+
 /**
  * Helper to authenticate caller and verify 'admin' Custom Claim
  */
@@ -42,18 +52,31 @@ export async function GET(req: Request) {
   }
 
   try {
-    // 1. Fetch all Firestore user profile records (gracefully fall back if Firestore quota is exhausted)
+    // 1. Fetch all Firestore user profile records (with 5-minute TTL caching to preserve daily read quota)
     const firestoreUsersMap = new Map<string, Record<string, unknown>>();
+    const nowForCache = Date.now();
     let firestoreQuotaExceeded = false;
-    try {
-      const usersSnap = await adminDb.collection('users').get();
-      usersSnap.forEach(doc => {
-        firestoreUsersMap.set(doc.id, doc.data());
-      });
-    } catch (fsErr: unknown) {
-      const fsMsg = fsErr instanceof Error ? fsErr.message : String(fsErr);
-      console.warn('[AdminUsersAPI] Firestore read bypassed (Quota/Offline). Falling back to Firebase Auth directory:', fsMsg);
-      firestoreQuotaExceeded = true;
+
+    if (cachedUsersDirectory && (nowForCache - lastUsersDirectoryFetchEpoch < DIRECTORY_CACHE_TTL_MS)) {
+      // Warm in-memory cache hit: 0 Firestore reads!
+      cachedUsersDirectory.forEach((val, key) => firestoreUsersMap.set(key, val));
+    } else {
+      try {
+        const usersSnap = await adminDb.collection('users').get();
+        usersSnap.forEach(doc => {
+          firestoreUsersMap.set(doc.id, doc.data());
+        });
+        cachedUsersDirectory = new Map(firestoreUsersMap);
+        lastUsersDirectoryFetchEpoch = nowForCache;
+      } catch (fsErr: unknown) {
+        const fsMsg = fsErr instanceof Error ? fsErr.message : String(fsErr);
+        console.warn('[AdminUsersAPI] Firestore read bypassed (Quota/Offline). Falling back to cached profiles or Auth directory:', fsMsg);
+        if (cachedUsersDirectory) {
+          cachedUsersDirectory.forEach((val, key) => firestoreUsersMap.set(key, val));
+        } else {
+          firestoreQuotaExceeded = true;
+        }
+      }
     }
 
     // 2. Fetch all Auth users to retrieve real, authoritative Custom Claims
@@ -275,6 +298,9 @@ export async function PATCH(req: Request) {
     } catch (auditErr) {
       console.warn('[AdminUsersAPI] Warning: Audit log write failed:', auditErr);
     }
+
+    // Invalidate user cache so directory immediately displays updated role
+    invalidateUsersCache();
 
     return NextResponse.json({
       success: true,

@@ -576,6 +576,37 @@ Tested and confirmed 8 genuine issues identified during live QA testing of `http
   - 10-minute inactivity timeout strictly preserved.
   - Zero regressions across Admin role management, Menstrual tracking, and Blood Bank subsystems.
 
+---
+
+### Completed: Phase 3.10 — Cloud Firestore Quota & Read Optimization
+- **Identified Read Bottlenecks (12,844 reads used on Spark Free 50,000/day tier):**
+  1. **Presence Route Role Fallback:** `/api/presence/session` performed `await adminDb.collection('users').doc(uid).get()` on EVERY POST if custom claim `role` was missing (e.g. for standard patient accounts). This caused hundreds to thousands of reads per day from 60-second heartbeats and interaction pings.
+  2. **Admin User-Log Full Collection Scan:** `/api/admin/user-log` executed `adminDb.collection('users').get()` on every visit, every role filter toggle, and every 60-second auto-refresh, reading the entire user collection repeatedly.
+  3. **Doctor Dashboard Eager Subcollection Queries:** `DoctorDashboard.tsx` looped through every patient who ever had an appointment and queried `patients/${pId}/medicalRecords`, burning dozens of reads per doctor login even though medical records are only viewed on `/dashboard/patients/[id]`.
+  4. **Client-Side Profile Reloads:** `src/lib/auth.js` queried `doc(db, 'users', uid)` on every single page mount and route change.
+- **Architectural Optimizations Implemented:**
+  1. **Zero-Read Presence System (`src/app/api/presence/session/route.ts` & `src/components/PresenceTracker.tsx`):**
+     - Completely removed `adminDb` and Firestore lookups from `/api/presence/session`.
+     - Role is resolved via: `(decodedToken.role) || (body.role && ALLOWED_ROLES.includes(body.role)) || 'patient'`.
+     - `<PresenceTracker />` passes client role in payload.
+     - **Result:** Exact 0 Firestore reads on all presence reservations, activations, heartbeats, activity pings, and logouts.
+  2. **In-Memory TTL Caching for Admin Endpoints (`/api/admin/user-log` & `/api/admin/users`):**
+     - Implemented 5-minute module-level memory cache for Firestore user directory profiles.
+     - Admin auto-refresh every 60s reuses the warm cache (0 reads).
+     - Full graceful fallback to `adminAuth.listUsers()` metadata if Firestore is unavailable or quota is capped.
+     - Cache auto-invalidates on administrative role updates (`PATCH /api/admin/users`).
+  3. **Doctor Dashboard Subcollection Query Elimination (`src/app/dashboard/DoctorDashboard.tsx`):**
+     - Removed the eager `medicalRecords` subcollection query from the patient roster loop.
+     - Medical records load strictly on-demand when navigating to `/dashboard/patients/[id]`.
+  4. **Client-Side Profile & Lookup Caching (`src/lib/auth.js` & `PatientDashboard.tsx`):**
+     - Added 5-minute `sessionStorage` caching for the current user's profile in `AuthProvider`, clearing on explicit logout.
+     - Added 10-minute `sessionStorage` caching for `publicDoctorProfiles` in `PatientDashboard.tsx`.
+- **Verification & Guarantees:**
+  - 10-minute inactivity timeout strictly preserved.
+  - Spark Free tier ($0/month) protected against daily quota exhaustion.
+  - Zero functional regressions across Admin role management, Menstrual tracking, and Blood Bank subsystems.
+
+
 
 
 

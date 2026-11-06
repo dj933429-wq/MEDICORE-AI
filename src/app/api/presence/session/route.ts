@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { adminAuth, adminRtdb, adminDb } from '@/lib/firebaseAdmin';
+import { adminAuth, adminRtdb } from '@/lib/firebaseAdmin';
 import {
   finalizeUserSessionAtomic,
   evaluateSessionCreation,
@@ -16,6 +16,7 @@ interface SessionRequestBody {
   isExplicitLogin?: boolean;
   token?: string;
   expectedGeneration?: number;
+  role?: string;
 }
 
 export async function POST(req: Request) {
@@ -48,15 +49,15 @@ export async function POST(req: Request) {
     const serverTime = new Date().toISOString();
     const serverEpoch = Date.now();
 
-    // Determine trusted role from Custom Claims or profile
+    // Determine trusted role from Custom Claims, client payload, or fallback
+    // (Zero Firestore reads on every presence / heartbeat / ping call!)
+    const ALLOWED_ROLES = ['patient', 'doctor', 'admin', 'pharmacist', 'receptionist', 'nurse', 'blood_bank'];
     let role = (decodedToken.role as string) || '';
+    if (!role && body.role && ALLOWED_ROLES.includes(body.role)) {
+      role = body.role;
+    }
     if (!role) {
-      try {
-        const userDoc = await adminDb.collection('users').doc(uid).get();
-        role = (userDoc.data()?.role as string) || 'patient';
-      } catch {
-        role = 'patient';
-      }
+      role = 'patient';
     }
 
     const activityRef = adminRtdb.ref(`activity/${uid}`);
